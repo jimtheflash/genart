@@ -77,6 +77,7 @@ h1 {
   display: grid;
   min-height: 0;
   place-items: center;
+  background: transparent;
 }
 
 #canvasMount {
@@ -129,6 +130,16 @@ label,
   text-transform: uppercase;
 }
 
+#speedValue {
+  max-width: 16rem;
+  color: var(--ink);
+  font-size: 0.74rem;
+  letter-spacing: 0;
+  line-height: 1.25;
+  text-align: right;
+  text-transform: none;
+}
+
 select,
 textarea {
   width: 100%;
@@ -152,6 +163,51 @@ textarea {
     "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
   font-size: 0.78rem;
   line-height: 1.45;
+}
+
+.palette-browser {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.palette-swatch {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  min-height: 42px;
+  padding: 6px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: #fbfaf6;
+  color: var(--ink);
+  text-align: left;
+}
+
+.palette-swatch:hover {
+  background: var(--button-hover);
+}
+
+.palette-swatch.is-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(15, 139, 141, 0.16);
+}
+
+.swatch-chip {
+  display: block;
+  width: 26px;
+  height: 26px;
+  border: 1px solid rgba(32, 33, 36, 0.18);
+  border-radius: 50%;
+}
+
+.swatch-name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .button-grid {
@@ -187,6 +243,10 @@ button:active {
   background: var(--accent-strong);
 }
 
+#fullscreenBtn {
+  grid-column: 1 / -1;
+}
+
 #savePreviewBtn {
   border-color: rgba(240, 108, 69, 0.42);
   background: #fff1eb;
@@ -195,6 +255,40 @@ button:active {
 input[type="range"] {
   width: 100%;
   accent-color: var(--accent);
+}
+
+.canvas-stage:fullscreen,
+.canvas-stage.is-app-fullscreen {
+  display: grid;
+  width: 100vw;
+  height: 100vh;
+  padding: 0;
+  background: #050505;
+  place-items: center;
+}
+
+.canvas-stage.is-app-fullscreen {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+}
+
+.canvas-stage:fullscreen #canvasMount,
+.canvas-stage.is-app-fullscreen #canvasMount {
+  width: min(100vw, 100vh);
+  max-width: none !important;
+}
+
+.canvas-stage:fullscreen canvas,
+.canvas-stage.is-app-fullscreen canvas {
+  width: min(100vw, 100vh) !important;
+  height: min(100vw, 100vh) !important;
+  border: 0;
+  box-shadow: none;
+}
+
+body.has-app-fullscreen {
+  overflow: hidden;
 }
 
 @media (max-width: 860px) {
@@ -226,5 +320,13 @@ input[type="range"] {
 
   .control-section {
     padding: 18px 16px;
+  }
+
+  .palette-browser {
+    grid-template-columns: 1fr;
+  }
+
+  #speedValue {
+    max-width: none;
   }
 }

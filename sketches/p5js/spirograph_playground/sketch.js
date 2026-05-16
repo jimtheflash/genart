@@ -2,20 +2,24 @@
 // Run from the repo root with: python3 -m http.server 8000
 // Then open: http://localhost:8000/sketches/p5js/spirograph_playground/
 
-const PALETTE_URL = "../../../lib/palettes/clifford_attractor_basic.yml";
+const PALETTE_URL = "../../../palettes.yml";
 const FALLBACK_PALETTES = [
   { name: "fallback_black_on_white", background: [255, 255, 255], points: [0, 0, 0], alpha: 190 },
 ];
 const TWO_PI_VALUE = Math.PI * 2;
 const PREVIEW_EXPORT_SIZE = 900;
-const TARGET_DRAW_SECONDS_AT_MAX_SPEED = 120;
-const ASSUMED_FRAME_RATE = 60;
 const MAX_PLAYBACK_STEPS_PER_FRAME = 3000;
-const GENERATED_TOTAL_STEPS =
-  TARGET_DRAW_SECONDS_AT_MAX_SPEED * ASSUMED_FRAME_RATE * MAX_PLAYBACK_STEPS_PER_FRAME;
+const MAX_TOTAL_STEPS = 10000000;
+const GENERATED_TOTAL_STEPS = MAX_TOTAL_STEPS;
 const SPARKLE_TRAIL_LIMIT = 180;
 const MAX_REDRAW_VERTICES = 140000;
 const FIT_SAMPLE_POINTS = 120000;
+const MIN_DRAW_SPEED = 0.01;
+const MAX_DRAW_SPEED = 1;
+const DISPLAY_FRAME_RATE = 60;
+const TAPER_START_STEP = 8000000;
+const MIN_TAPER_OPACITY = 0.35;
+const TAPER_CHUNK_STEPS = 100000;
 
 let ui = {};
 let palettes = FALLBACK_PALETTES.slice();
@@ -28,6 +32,7 @@ let canvasSize = 720;
 let currentStep = 0;
 let renderedStep = 0;
 let isPlaying = true;
+let playDirection = 1;
 let paletteLoadMessage = "Using fallback palette";
 
 function setup() {
@@ -38,6 +43,8 @@ function setup() {
 
   cacheUi();
   installUiEvents();
+  ui.speedRange.value = formatSpeedValue(MAX_DRAW_SPEED);
+  syncSpeedUi();
   resizeArtworkCanvas();
 
   loadPalettes().then((loadedPalettes) => {
@@ -54,17 +61,8 @@ function draw() {
     return;
   }
 
-  if (isPlaying && currentStep < recipe.totalSteps) {
-    const nextStep = Math.min(recipe.totalSteps, currentStep + playbackStride());
-    drawTrailSegment(currentStep, nextStep, trailLayer, canvasSize);
-    currentStep = nextStep;
-    renderedStep = nextStep;
-
-    if (currentStep >= recipe.totalSteps) {
-      isPlaying = false;
-    }
-
-    syncProgressUi();
+  if (isPlaying) {
+    advancePlayback();
   }
 
   const palette = activePalette();
@@ -88,6 +86,7 @@ function cacheUi() {
     restartBtn: document.getElementById("restartBtn"),
     playPauseBtn: document.getElementById("playPauseBtn"),
     jumpEndBtn: document.getElementById("jumpEndBtn"),
+    fullscreenBtn: document.getElementById("fullscreenBtn"),
     speedRange: document.getElementById("speedRange"),
     speedValue: document.getElementById("speedValue"),
     progressRange: document.getElementById("progressRange"),
@@ -98,6 +97,8 @@ function cacheUi() {
     loadRecipeBtn: document.getElementById("loadRecipeBtn"),
     recipeBox: document.getElementById("recipeBox"),
     statusLine: document.getElementById("statusLine"),
+    paletteBrowser: document.getElementById("paletteBrowser"),
+    canvasStage: document.querySelector(".canvas-stage"),
   };
 }
 
@@ -108,21 +109,18 @@ function installUiEvents() {
 
   ui.paletteSelect.addEventListener("change", () => {
     if (!recipe) return;
-    const paletteIndex = Number(ui.paletteSelect.value);
-    recipe.paletteIndex = paletteIndex;
-    recipe.paletteName = palettes[paletteIndex].name;
-    renderTrailToStep(currentStep);
-    syncRecipeBox();
+    selectPalette(Number(ui.paletteSelect.value));
   });
 
   ui.randomizeBtn.addEventListener("click", () => randomizeArtwork());
   ui.restartBtn.addEventListener("click", restartArtwork);
   ui.playPauseBtn.addEventListener("click", togglePlayback);
   ui.jumpEndBtn.addEventListener("click", jumpToEnd);
+  ui.fullscreenBtn.addEventListener("click", enterFullscreen);
 
   ui.speedRange.addEventListener("input", () => {
     if (recipe) {
-      recipe.drawSpeed = Number(ui.speedRange.value);
+      recipe.drawSpeed = normalizeDrawSpeed(ui.speedRange.value);
       syncRecipeBox();
     }
     syncSpeedUi();
@@ -132,6 +130,7 @@ function installUiEvents() {
     if (!recipe) return;
     isPlaying = false;
     currentStep = Number(ui.progressRange.value);
+    playDirection = 1;
     renderTrailToStep(currentStep);
   });
 
@@ -139,6 +138,18 @@ function installUiEvents() {
   ui.copyRecipeBtn.addEventListener("click", copyRecipe);
   ui.saveRecipeBtn.addEventListener("click", saveRecipe);
   ui.loadRecipeBtn.addEventListener("click", loadRecipeFromBox);
+  document.addEventListener("fullscreenchange", () => {
+    if (document.fullscreenElement) {
+      exitAppFullscreen();
+    }
+    resizeArtworkCanvas();
+    syncFullscreenUi();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && ui.canvasStage.classList.contains("is-app-fullscreen")) {
+      exitAppFullscreen();
+    }
+  });
 }
 
 async function loadPalettes() {
@@ -206,12 +217,41 @@ function parseRgb(value) {
 
 function populatePaletteSelect() {
   ui.paletteSelect.innerHTML = "";
+  ui.paletteBrowser.innerHTML = "";
   palettes.forEach((palette, index) => {
     const option = document.createElement("option");
     option.value = String(index);
     option.textContent = palette.name;
     ui.paletteSelect.appendChild(option);
+
+    const swatch = document.createElement("button");
+    swatch.type = "button";
+    swatch.className = "palette-swatch";
+    swatch.dataset.paletteIndex = String(index);
+    swatch.setAttribute("aria-label", `Use ${palette.name} palette`);
+    swatch.innerHTML = `
+      <span class="swatch-chip" aria-hidden="true"></span>
+      <span class="swatch-name">${escapeHtml(palette.name)}</span>
+    `;
+
+    const chip = swatch.querySelector(".swatch-chip");
+    chip.style.background = `linear-gradient(135deg, rgb(${palette.background.join(",")}) 0 49%, rgb(${palette.points.join(",")}) 51% 100%)`;
+
+    swatch.addEventListener("click", () => selectPalette(index));
+    ui.paletteBrowser.appendChild(swatch);
   });
+  syncPaletteBrowser();
+}
+
+function selectPalette(paletteIndex) {
+  if (!recipe) return;
+  const safePaletteIndex = resolvePaletteIndex(paletteIndex);
+  recipe.paletteIndex = safePaletteIndex;
+  recipe.paletteName = palettes[safePaletteIndex].name;
+  ui.paletteSelect.value = String(safePaletteIndex);
+  syncPaletteBrowser();
+  renderTrailToStep(currentStep);
+  syncRecipeBox();
 }
 
 function randomizeArtwork(overrides = {}) {
@@ -237,7 +277,7 @@ function makeRecipe({ mode, seed, paletteIndex }) {
     paletteName: palettes[safePaletteIndex].name,
     canvas: { aspect: 1 },
     totalSteps: generated.totalSteps,
-    drawSpeed: Number(ui.speedRange.value),
+    drawSpeed: normalizeDrawSpeed(ui.speedRange.value),
     params: generated.params,
   };
 }
@@ -245,20 +285,22 @@ function makeRecipe({ mode, seed, paletteIndex }) {
 function applyRecipe(nextRecipe, options = {}) {
   recipe = normalizeRecipe(nextRecipe);
   pathPoints = generatePathPoints(recipe);
-  currentStep = 0;
+  currentStep = clamp(Math.round(Number(recipe.currentStep || 0)), 0, recipe.totalSteps);
   renderedStep = 0;
   sparkles = [];
+  playDirection = recipe.playDirection === -1 ? -1 : 1;
   isPlaying = options.startPlaying ?? false;
 
   ui.modeSelect.value = recipe.mode;
   ui.paletteSelect.value = String(recipe.paletteIndex);
-  ui.speedRange.value = String(recipe.drawSpeed);
+  ui.speedRange.value = formatSpeedValue(recipe.drawSpeed);
   ui.progressRange.max = String(recipe.totalSteps);
-  ui.progressRange.value = "0";
+  ui.progressRange.value = String(currentStep);
 
   syncSpeedUi();
+  syncPaletteBrowser();
   syncRecipeBox();
-  renderTrailToStep(0);
+  renderTrailToStep(currentStep);
 }
 
 function normalizeRecipe(source) {
@@ -275,9 +317,12 @@ function normalizeRecipe(source) {
   const totalSteps = clamp(
     Math.round(Number(source.totalSteps || fallback.totalSteps)),
     1200,
-    GENERATED_TOTAL_STEPS * 2,
+    MAX_TOTAL_STEPS,
   );
-  const drawSpeed = clamp(Math.round(Number(source.drawSpeed || ui.speedRange.value)), 1, 100);
+  const drawSpeed = normalizeDrawSpeed(source.drawSpeed ?? ui.speedRange.value);
+  const currentStep = clamp(Math.round(Number(source.currentStep || 0)), 0, totalSteps);
+  const progressPercent = totalSteps > 0 ? roundForRecipe((currentStep / totalSteps) * 100) : 0;
+  const playDirection = source.playDirection === -1 ? -1 : 1;
 
   return {
     version: 1,
@@ -289,6 +334,9 @@ function normalizeRecipe(source) {
     canvas: { aspect: 1 },
     totalSteps,
     drawSpeed,
+    currentStep,
+    progressPercent,
+    playDirection,
     params: source.params || fallback.params,
   };
 }
@@ -483,8 +531,10 @@ function resizeArtworkCanvas() {
   const mount = document.getElementById("canvasMount");
   const stage = document.querySelector(".canvas-stage");
   const stageWidth = stage ? stage.getBoundingClientRect().width : window.innerWidth;
-  const heightLimit = Math.max(320, window.innerHeight - 96);
-  const nextSize = clamp(Math.floor(Math.min(stageWidth, heightLimit, 920)), 320, 920);
+  const fullscreenActive = document.fullscreenElement === stage || stage?.classList.contains("is-app-fullscreen");
+  const heightLimit = fullscreenActive ? window.innerHeight : Math.max(320, window.innerHeight - 96);
+  const maxCanvasSize = fullscreenActive ? 1600 : 920;
+  const nextSize = clamp(Math.floor(Math.min(stageWidth, heightLimit, maxCanvasSize)), 320, maxCanvasSize);
 
   canvasSize = nextSize;
   resizeCanvas(canvasSize, canvasSize);
@@ -521,6 +571,27 @@ function drawTrailSegment(fromStep, toStep, target, size) {
   const alpha = Math.max(150, palette.alpha);
   const start = clamp(Math.floor(fromStep), 0, recipe.totalSteps);
   const end = clamp(Math.floor(toStep), 0, recipe.totalSteps);
+
+  if (end <= TAPER_START_STEP) {
+    drawTrailRange(start, end, target, size, palette, alpha, 1);
+    return;
+  }
+
+  if (start < TAPER_START_STEP) {
+    drawTrailRange(start, TAPER_START_STEP, target, size, palette, alpha, 1);
+  }
+
+  let chunkStart = Math.max(start, TAPER_START_STEP);
+  while (chunkStart < end) {
+    const chunkEnd = Math.min(end, chunkStart + TAPER_CHUNK_STEPS);
+    const midpoint = (chunkStart + chunkEnd) * 0.5;
+    drawTrailRange(chunkStart, chunkEnd, target, size, palette, alpha, opacityMultiplierForStep(midpoint));
+    chunkStart = chunkEnd;
+  }
+}
+
+function drawTrailRange(start, end, target, size, palette, alpha, opacityMultiplier) {
+  if (end <= start) return;
   const darkBackground = isDarkPalette(palette);
 
   target.push();
@@ -530,16 +601,41 @@ function drawTrailSegment(fromStep, toStep, target, size) {
   if (darkBackground) {
     target.drawingContext.save();
     target.drawingContext.shadowBlur = Math.max(10, size * 0.018);
-    target.drawingContext.shadowColor = rgbaString(palette.points, 0.64);
-    target.stroke(...palette.points, Math.min(180, alpha + 35));
+    target.drawingContext.shadowColor = rgbaString(palette.points, 0.64 * opacityMultiplier);
+    target.stroke(...palette.points, Math.min(180, alpha + 35) * opacityMultiplier);
     target.strokeWeight(Math.max(3.2, size / 230));
     drawPathShape(target, start, end, size);
     target.drawingContext.restore();
   }
-  target.stroke(...palette.points, alpha);
+  target.stroke(...palette.points, alpha * opacityMultiplier);
   target.strokeWeight(Math.max(1.05, size / 780));
   drawPathShape(target, start, end, size);
   target.pop();
+}
+
+function advancePlayback() {
+  if (!recipe) return;
+
+  const stride = playbackStride();
+  const nextStep = clamp(currentStep + playDirection * stride, 0, recipe.totalSteps);
+
+  if (playDirection > 0) {
+    drawTrailSegment(currentStep, nextStep, trailLayer, canvasSize);
+  }
+
+  currentStep = nextStep;
+  renderedStep = nextStep;
+
+  if (currentStep >= recipe.totalSteps) {
+    playDirection = -1;
+    currentStep = recipe.totalSteps;
+  } else if (currentStep <= 0) {
+    playDirection = 1;
+    currentStep = 0;
+    renderTrailToStep(0);
+  }
+
+  syncProgressUi();
 }
 
 function drawPathShape(target, start, end, size) {
@@ -565,16 +661,17 @@ function drawActivePoint() {
   const pulse = 1 + Math.sin(frameCount * 0.16) * 0.12;
   const radius = Math.max(6, canvasSize * 0.01) * pulse;
   const sparkColor = sparkColorForPalette(palette);
+  const opacityMultiplier = opacityMultiplierForStep(currentStep);
 
   push();
   drawingContext.save();
   drawingContext.shadowBlur = Math.max(12, canvasSize * 0.022);
-  drawingContext.shadowColor = rgbaString(sparkColor, 0.9);
+  drawingContext.shadowColor = rgbaString(sparkColor, 0.9 * opacityMultiplier);
   noFill();
-  stroke(...sparkColor, 235);
+  stroke(...sparkColor, 235 * opacityMultiplier);
   strokeWeight(Math.max(1.2, canvasSize / 520));
   circle(mapped.x, mapped.y, radius * 2.6);
-  fill(...sparkColor, 245);
+  fill(...sparkColor, 245 * opacityMultiplier);
   noStroke();
   circle(mapped.x, mapped.y, radius);
   drawingContext.restore();
@@ -594,6 +691,7 @@ function mapPathIndexToCanvas(index, size) {
 function restartArtwork() {
   if (!recipe) return;
   currentStep = 0;
+  playDirection = 1;
   isPlaying = true;
   sparkles = [];
   renderTrailToStep(0);
@@ -601,10 +699,6 @@ function restartArtwork() {
 
 function togglePlayback() {
   if (!recipe) return;
-  if (currentStep >= recipe.totalSteps) {
-    currentStep = 0;
-    renderTrailToStep(0);
-  }
   isPlaying = !isPlaying;
   syncPlaybackUi();
 }
@@ -612,17 +706,110 @@ function togglePlayback() {
 function jumpToEnd() {
   if (!recipe) return;
   currentStep = recipe.totalSteps;
+  playDirection = -1;
   isPlaying = false;
   renderTrailToStep(currentStep);
 }
 
+function enterFullscreen() {
+  if (!ui.canvasStage) return;
+
+  if (ui.canvasStage.classList.contains("is-app-fullscreen")) {
+    exitAppFullscreen();
+    return;
+  }
+
+  if (document.fullscreenElement) {
+    document.exitFullscreen();
+    return;
+  }
+
+  if (!ui.canvasStage.requestFullscreen) {
+    enterAppFullscreen();
+    return;
+  }
+
+  ui.canvasStage
+    .requestFullscreen()
+    .then(() => {
+      if (!document.fullscreenElement) {
+        enterAppFullscreen();
+      }
+    })
+    .catch(() => {
+      enterAppFullscreen();
+    });
+}
+
+function enterAppFullscreen() {
+  ui.canvasStage.classList.add("is-app-fullscreen");
+  document.body.classList.add("has-app-fullscreen");
+  resizeArtworkCanvas();
+  syncFullscreenUi();
+}
+
+function exitAppFullscreen() {
+  ui.canvasStage.classList.remove("is-app-fullscreen");
+  document.body.classList.remove("has-app-fullscreen");
+  resizeArtworkCanvas();
+  syncFullscreenUi();
+}
+
 function playbackStride() {
-  const speed = Number(ui.speedRange.value);
-  return Math.max(1, Math.round(1 + Math.pow(speed / 100, 2.2) * (MAX_PLAYBACK_STEPS_PER_FRAME - 1)));
+  const speed = normalizeDrawSpeed(ui.speedRange.value);
+  return playbackStrideForSpeed(speed);
 }
 
 function syncSpeedUi() {
-  ui.speedValue.textContent = ui.speedRange.value;
+  const speed = normalizeDrawSpeed(ui.speedRange.value);
+  const stepsPerSecond = playbackStrideForSpeed(speed) * DISPLAY_FRAME_RATE;
+  const passSeconds = recipe ? recipe.totalSteps / stepsPerSecond : MAX_TOTAL_STEPS / stepsPerSecond;
+  ui.speedValue.textContent = `${formatStepRate(stepsPerSecond)} steps/sec @60fps • ${formatDuration(passSeconds)} / pass`;
+}
+
+function playbackStrideForSpeed(speed) {
+  return Math.max(1, Math.round(1 + Math.pow(speed, 2.2) * (MAX_PLAYBACK_STEPS_PER_FRAME - 1)));
+}
+
+function normalizeDrawSpeed(value) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return MAX_DRAW_SPEED;
+  }
+
+  const migratedValue = numericValue > MAX_DRAW_SPEED ? numericValue / 100 : numericValue;
+  return roundForRecipe(clamp(migratedValue, MIN_DRAW_SPEED, MAX_DRAW_SPEED));
+}
+
+function formatSpeedValue(value) {
+  return normalizeDrawSpeed(value).toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function formatStepRate(value) {
+  if (value >= 1000000) {
+    return `${roundForRecipe(value / 1000000)}M`;
+  }
+
+  if (value >= 1000) {
+    return `${Math.round(value / 1000)}k`;
+  }
+
+  return String(Math.round(value));
+}
+
+function formatDuration(totalSeconds) {
+  if (!Number.isFinite(totalSeconds)) return "--";
+
+  const roundedSeconds = Math.max(1, Math.round(totalSeconds));
+  const hours = Math.floor(roundedSeconds / 3600);
+  const minutes = Math.floor((roundedSeconds % 3600) / 60);
+  const seconds = roundedSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
 function syncProgressUi() {
@@ -635,6 +822,21 @@ function syncProgressUi() {
 
 function syncPlaybackUi() {
   ui.playPauseBtn.textContent = isPlaying ? "Pause" : "Play";
+}
+
+function syncPaletteBrowser() {
+  if (!ui.paletteBrowser || !recipe) return;
+  ui.paletteBrowser.querySelectorAll(".palette-swatch").forEach((swatch) => {
+    const isActive = Number(swatch.dataset.paletteIndex) === recipe.paletteIndex;
+    swatch.classList.toggle("is-active", isActive);
+    swatch.setAttribute("aria-pressed", String(isActive));
+  });
+}
+
+function syncFullscreenUi() {
+  if (!ui.fullscreenBtn) return;
+  const isFullscreen = Boolean(document.fullscreenElement) || ui.canvasStage?.classList.contains("is-app-fullscreen");
+  ui.fullscreenBtn.textContent = isFullscreen ? "Exit Fullscreen" : "Fullscreen";
 }
 
 function syncStatus(message) {
@@ -653,7 +855,19 @@ function syncStatus(message) {
 
 function syncRecipeBox() {
   if (!recipe) return;
-  ui.recipeBox.value = JSON.stringify(recipe, null, 2);
+  ui.recipeBox.value = JSON.stringify(recipeForCurrentStep(), null, 2);
+}
+
+function recipeForCurrentStep() {
+  const safeStep = recipe ? clamp(Math.round(currentStep), 0, recipe.totalSteps) : 0;
+  const progressPercent = recipe && recipe.totalSteps > 0 ? roundForRecipe((safeStep / recipe.totalSteps) * 100) : 0;
+
+  return {
+    ...recipe,
+    currentStep: safeStep,
+    progressPercent,
+    playDirection,
+  };
 }
 
 async function copyRecipe() {
@@ -718,15 +932,16 @@ function drawPreviewCursor(target, size) {
   const palette = activePalette();
   const mapped = mapPathIndexToCanvas(currentStep, size);
   const sparkColor = sparkColorForPalette(palette);
+  const opacityMultiplier = opacityMultiplierForStep(currentStep);
   target.push();
   target.drawingContext.save();
   target.drawingContext.shadowBlur = Math.max(14, size * 0.02);
-  target.drawingContext.shadowColor = rgbaString(sparkColor, 0.9);
+  target.drawingContext.shadowColor = rgbaString(sparkColor, 0.9 * opacityMultiplier);
   target.noFill();
-  target.stroke(...sparkColor, 230);
+  target.stroke(...sparkColor, 230 * opacityMultiplier);
   target.strokeWeight(2);
   target.circle(mapped.x, mapped.y, 22);
-  target.fill(...sparkColor, 245);
+  target.fill(...sparkColor, 245 * opacityMultiplier);
   target.noStroke();
   target.circle(mapped.x, mapped.y, 10);
   target.drawingContext.restore();
@@ -768,7 +983,7 @@ function updateSparkles() {
   const palette = activePalette();
   sparkLayer.clear();
 
-  if (isPlaying && currentStep < recipe.totalSteps) {
+  if (isPlaying && currentStep > 0 && currentStep < recipe.totalSteps) {
     emitSparkles(palette);
   }
 
@@ -788,7 +1003,7 @@ function updateSparkles() {
     }
 
     const progress = spark.life / spark.maxLife;
-    const alpha = 220 * progress * progress;
+    const alpha = 220 * progress * progress * spark.opacityMultiplier;
     sparkLayer.noStroke();
     sparkLayer.fill(...spark.color, alpha);
     sparkLayer.circle(spark.x, spark.y, spark.size * (0.45 + progress));
@@ -798,10 +1013,11 @@ function updateSparkles() {
 
 function emitSparkles(palette) {
   const mapped = mapPathIndexToCanvas(currentStep, canvasSize);
-  const previousMapped = mapPathIndexToCanvas(Math.max(0, currentStep - playbackStride()), canvasSize);
+  const previousMapped = mapPathIndexToCanvas(currentStep - playDirection * playbackStride(), canvasSize);
   const angle = Math.atan2(mapped.y - previousMapped.y, mapped.x - previousMapped.x);
   const count = isDarkPalette(palette) ? 5 : 3;
   const color = sparkColorForPalette(palette);
+  const opacityMultiplier = opacityMultiplierForStep(currentStep);
 
   for (let index = 0; index < count; index += 1) {
     const sideSpray = random(-1.9, 1.9);
@@ -817,6 +1033,7 @@ function emitSparkles(palette) {
       maxLife: life,
       size: random(canvasSize * 0.004, canvasSize * 0.011),
       color,
+      opacityMultiplier,
     });
   }
 
@@ -850,6 +1067,16 @@ function warmSparkColor(baseColor) {
 
 function rgbaString(rgb, alpha) {
   return `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${alpha})`;
+}
+
+function opacityMultiplierForStep(step) {
+  if (step <= TAPER_START_STEP) {
+    return 1;
+  }
+
+  const progress = clamp((step - TAPER_START_STEP) / (MAX_TOTAL_STEPS - TAPER_START_STEP), 0, 1);
+  const easedProgress = progress * progress;
+  return 1 - easedProgress * (1 - MIN_TAPER_OPACITY);
 }
 
 function emptyPathPoints() {
@@ -925,4 +1152,12 @@ function roundForRecipe(value) {
 
 function luminance(rgb) {
   return rgb[0] * 0.299 + rgb[1] * 0.587 + rgb[2] * 0.114;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }

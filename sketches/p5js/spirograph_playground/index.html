@@ -33,6 +33,7 @@
           <div class="field">
             <label for="paletteSelect">Palette</label>
             <select id="paletteSelect"></select>
+            <div id="paletteBrowser" class="palette-browser" aria-label="Palette browser"></div>
           </div>
 
           <div class="button-grid">
@@ -40,6 +41,7 @@
             <button id="restartBtn" type="button">Restart</button>
             <button id="playPauseBtn" type="button">Pause</button>
             <button id="jumpEndBtn" type="button">End</button>
+            <button id="fullscreenBtn" type="button">Fullscreen</button>
           </div>
         </section>
 
@@ -47,9 +49,9 @@
           <div class="field">
             <div class="label-row">
               <label for="speedRange">Speed</label>
-              <span id="speedValue">100</span>
+              <span id="speedValue">1</span>
             </div>
-            <input id="speedRange" type="range" min="1" max="100" value="100" />
+            <input id="speedRange" type="range" min="0.01" max="1" step="0.01" value="1" autocomplete="off" />
           </div>
 
           <div class="field">

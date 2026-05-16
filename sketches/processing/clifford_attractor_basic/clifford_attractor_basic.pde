@@ -14,7 +14,7 @@ import java.io.File;
 import java.io.PrintWriter;
 
 final String SKETCH_NAME = "clifford_attractor_basic";
-final String PALETTE_FILE = "../../../lib/palettes/clifford_attractor_basic.yml";
+final String PALETTE_FILE = "../../../palettes.yml";
 final int PREVIEW_SIZE = 900;
 final int EXPORT_SIZE = 4800;
 final int EXPORT_DPI = 300;

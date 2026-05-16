@@ -6,7 +6,7 @@ Most sketches can be opened by loading their `index.html` file in a browser.
 
 ## Spirograph Playground
 
-Run this sketch from the repository root so it can fetch the shared palette YAML:
+Run this sketch from the repository root so it can fetch `palettes.yml`:
 
 ```text
 python3 -m http.server 8000

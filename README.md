@@ -13,7 +13,8 @@ This repo is intentionally multi-language. Processing and p5.js are good for fas
 - `sketches/rust/`: Rust experiments.
 - `sketches/cpp/`: C++ experiments.
 - `sketches/julia/`: Julia experiments.
-- `lib/`: Shared helpers, formulas, palettes, and reusable notes.
+- `palettes.yml`: Shared color palettes for sketches.
+- `lib/`: Shared helpers, formulas, and reusable notes.
 - `assets/`: Input assets.
 - `outputs/`: Generated images.
 - `docs/`: Notes about systems and techniques to explore.
@@ -46,4 +47,4 @@ In VS Code, install a Processing extension and configure it to use the Processin
 
 Each new attractor uses a randomized point count between 9M and 10M points. The high-resolution export is sized for a 16 inch square print at 300 dpi, and it uses the same point count, coefficients, seed, palette, and bounds as the preview. It also writes a matching `.txt` metadata file with the print details.
 
-Curated Clifford palettes live in `lib/palettes/clifford_attractor_basic.yml`.
+Shared palettes live in `palettes.yml`.
