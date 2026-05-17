@@ -1,0 +1,17 @@
+[package]
+name = "physarum"
+version = "0.1.0"
+edition = "2021"
+description = "Physarum slime-mold simulation. Ports DopeGenerativeArt's make_pollack_explosion and make_snakeasketch from R."
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+colorgrad = "0.6"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+rand = "0.8"
+rand_pcg = "0.3"
+rayon = "1.10"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
