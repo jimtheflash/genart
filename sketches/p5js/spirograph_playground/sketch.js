@@ -8,7 +8,7 @@ const FALLBACK_PALETTES = [
 ];
 const TWO_PI_VALUE = Math.PI * 2;
 const PREVIEW_EXPORT_SIZE = 900;
-const MAX_PLAYBACK_STEPS_PER_FRAME = 3000;
+const MAX_PLAYBACK_STEPS_PER_FRAME = 2400;
 const MAX_TOTAL_STEPS = 10000000;
 const GENERATED_TOTAL_STEPS = MAX_TOTAL_STEPS;
 const SPARKLE_TRAIL_LIMIT = 180;
@@ -17,15 +17,49 @@ const FIT_SAMPLE_POINTS = 120000;
 const MIN_DRAW_SPEED = 0.01;
 const MAX_DRAW_SPEED = 1;
 const DISPLAY_FRAME_RATE = 60;
-const TAPER_START_STEP = 8000000;
-const MIN_TAPER_OPACITY = 0.35;
-const TAPER_CHUNK_STEPS = 100000;
+const RECIPE_VERSION = 2;
+const SHAPE_RANDOM_VALUE = "random";
+const MIN_TRAIL_ALPHA = 150;
+const PERMANENT_TRAIL_OPACITY = 0.1;
+const RECENT_TRAIL_OPACITY = 0.9;
+const FRESH_TRAIL_REPEATS = 1;
+const RECENT_FADE_REPEATS = 6;
+const RECENT_FADE_CHUNKS = 18;
+const RECENT_CHUNK_VERTEX_LIMIT = 9000;
+const FIXED_PIECES = [
+  { id: "ring96", label: "Ring 96", radius: 96, variant: "hypotrochoid" },
+  { id: "ring120", label: "Ring 120", radius: 120, variant: "hypotrochoid" },
+  { id: "outer72", label: "Outer gear 72", radius: 72, variant: "epitrochoid" },
+  { id: "outer96", label: "Outer gear 96", radius: 96, variant: "epitrochoid" },
+];
+const ROLLING_WHEELS = [
+  { id: "wheel24", label: "Wheel 24", radius: 24 },
+  { id: "wheel32", label: "Wheel 32", radius: 32 },
+  { id: "wheel40", label: "Wheel 40", radius: 40 },
+  { id: "wheel52", label: "Wheel 52", radius: 52 },
+  { id: "wheel64", label: "Wheel 64", radius: 64 },
+];
+const PEN_HOLES = [
+  { id: "nearCenter", label: "Near center", ratio: 0.34 },
+  { id: "middle", label: "Middle", ratio: 0.62 },
+  { id: "nearEdge", label: "Near edge", ratio: 0.88 },
+  { id: "outerReach", label: "Outer reach", ratio: 1.16 },
+];
+const DEFAULT_SHAPE_SELECTION = {
+  fixedPieceId: SHAPE_RANDOM_VALUE,
+  wheelId: SHAPE_RANDOM_VALUE,
+  penHoleId: SHAPE_RANDOM_VALUE,
+};
+const FIXED_PIECE_BY_ID = Object.fromEntries(FIXED_PIECES.map((piece) => [piece.id, piece]));
+const ROLLING_WHEEL_BY_ID = Object.fromEntries(ROLLING_WHEELS.map((wheel) => [wheel.id, wheel]));
+const PEN_HOLE_BY_ID = Object.fromEntries(PEN_HOLES.map((hole) => [hole.id, hole]));
 
 let ui = {};
 let palettes = FALLBACK_PALETTES.slice();
 let recipe = null;
 let pathPoints = emptyPathPoints();
-let trailLayer = null;
+let baseTrailLayer = null;
+let recentTrailLayer = null;
 let sparkLayer = null;
 let sparkles = [];
 let canvasSize = 720;
@@ -56,7 +90,7 @@ function setup() {
 }
 
 function draw() {
-  if (!recipe || pathPoints.length === 0 || !trailLayer) {
+  if (!recipe || pathPoints.length === 0 || !baseTrailLayer || !recentTrailLayer) {
     background(245, 243, 238);
     return;
   }
@@ -66,11 +100,12 @@ function draw() {
   }
 
   const palette = activePalette();
+  syncArtworkBackground(palette);
   background(...palette.background);
-  image(trailLayer, 0, 0);
+  image(baseTrailLayer, 0, 0);
+  image(recentTrailLayer, 0, 0);
   updateSparkles();
   image(sparkLayer, 0, 0);
-  drawActivePoint();
   syncPlaybackUi();
 }
 
@@ -81,6 +116,10 @@ function windowResized() {
 function cacheUi() {
   ui = {
     modeSelect: document.getElementById("modeSelect"),
+    shapeControls: document.getElementById("shapeControls"),
+    fixedPieceSelect: document.getElementById("fixedPieceSelect"),
+    wheelSelect: document.getElementById("wheelSelect"),
+    penHoleSelect: document.getElementById("penHoleSelect"),
     paletteSelect: document.getElementById("paletteSelect"),
     randomizeBtn: document.getElementById("randomizeBtn"),
     restartBtn: document.getElementById("restartBtn"),
@@ -117,6 +156,9 @@ function installUiEvents() {
   ui.playPauseBtn.addEventListener("click", togglePlayback);
   ui.jumpEndBtn.addEventListener("click", jumpToEnd);
   ui.fullscreenBtn.addEventListener("click", enterFullscreen);
+  [ui.fixedPieceSelect, ui.wheelSelect, ui.penHoleSelect].forEach((select) => {
+    select.addEventListener("change", handleShapeControlChange);
+  });
 
   ui.speedRange.addEventListener("input", () => {
     if (recipe) {
@@ -249,6 +291,7 @@ function selectPalette(paletteIndex) {
   recipe.paletteIndex = safePaletteIndex;
   recipe.paletteName = palettes[safePaletteIndex].name;
   ui.paletteSelect.value = String(safePaletteIndex);
+  syncArtworkBackground(palettes[safePaletteIndex]);
   syncPaletteBrowser();
   renderTrailToStep(currentStep);
   syncRecipeBox();
@@ -257,19 +300,20 @@ function selectPalette(paletteIndex) {
 function randomizeArtwork(overrides = {}) {
   const mode = overrides.mode || ui.modeSelect.value || "classic";
   const paletteIndex = resolvePaletteIndex(overrides.paletteIndex ?? ui.paletteSelect.value);
+  const shapeSelection = overrides.shapeSelection || readShapeSelection();
   const seed = makeRecipeSeed();
-  const nextRecipe = makeRecipe({ mode, seed, paletteIndex });
+  const nextRecipe = makeRecipe({ mode, seed, paletteIndex, shapeSelection });
   applyRecipe(nextRecipe, { startPlaying: true });
 }
 
-function makeRecipe({ mode, seed, paletteIndex }) {
+function makeRecipe({ mode, seed, paletteIndex, shapeSelection = DEFAULT_SHAPE_SELECTION }) {
   const safeMode = mode === "epicycle" ? "epicycle" : "classic";
   const safePaletteIndex = resolvePaletteIndex(paletteIndex);
-  const generator = safeMode === "epicycle" ? makeEpicycleParams : makeClassicParams;
-  const generated = generator(seed);
+  const generated =
+    safeMode === "epicycle" ? makeEpicycleParams(seed) : makeClassicParams(seed, shapeSelection);
 
   return {
-    version: 1,
+    version: RECIPE_VERSION,
     app: "spirograph_playground",
     mode: safeMode,
     seed,
@@ -278,6 +322,7 @@ function makeRecipe({ mode, seed, paletteIndex }) {
     canvas: { aspect: 1 },
     totalSteps: generated.totalSteps,
     drawSpeed: normalizeDrawSpeed(ui.speedRange.value),
+    ...(generated.shape ? { shape: generated.shape } : {}),
     params: generated.params,
   };
 }
@@ -297,6 +342,8 @@ function applyRecipe(nextRecipe, options = {}) {
   ui.progressRange.max = String(recipe.totalSteps);
   ui.progressRange.value = String(currentStep);
 
+  syncArtworkBackground(activePalette());
+  syncShapeControls();
   syncSpeedUi();
   syncPaletteBrowser();
   syncRecipeBox();
@@ -313,7 +360,7 @@ function normalizeRecipe(source) {
     if (foundIndex >= 0) paletteIndex = foundIndex;
   }
 
-  const fallback = makeRecipe({ mode, seed, paletteIndex });
+  const fallback = makeRecipe({ mode, seed, paletteIndex, shapeSelection: source.shape });
   const totalSteps = clamp(
     Math.round(Number(source.totalSteps || fallback.totalSteps)),
     1200,
@@ -323,9 +370,21 @@ function normalizeRecipe(source) {
   const currentStep = clamp(Math.round(Number(source.currentStep || 0)), 0, totalSteps);
   const progressPercent = totalSteps > 0 ? roundForRecipe((currentStep / totalSteps) * 100) : 0;
   const playDirection = source.playDirection === -1 ? -1 : 1;
+  const params =
+    mode === "epicycle"
+      ? normalizeEpicycleParams(source.params || fallback.params)
+      : normalizeClassicParams(source.params || fallback.params);
+  const shapeSource =
+    mode === "classic"
+      ? source.shape || (source.params ? shapeFromClassicParams(params) : fallback.shape)
+      : null;
+  const shape =
+    mode === "classic"
+      ? normalizeClassicShape(shapeSource || shapeFromClassicParams(params), params)
+      : null;
 
   return {
-    version: 1,
+    version: RECIPE_VERSION,
     app: "spirograph_playground",
     mode,
     seed,
@@ -337,34 +396,166 @@ function normalizeRecipe(source) {
     currentStep,
     progressPercent,
     playDirection,
-    params: source.params || fallback.params,
+    ...(shape ? { shape } : {}),
+    params,
   };
 }
 
-function makeClassicParams(seed) {
-  const rng = mulberry32(seed);
-  const variant = rng() < 0.58 ? "hypotrochoid" : "epitrochoid";
-  let fixedRadius = randomInt(rng, 5, 14);
-  let rollingRadius = randomInt(rng, 2, 9);
+function handleShapeControlChange() {
+  if (!recipe) return;
+  ui.modeSelect.value = "classic";
+  randomizeArtwork({ mode: "classic", shapeSelection: readShapeSelection() });
+}
 
-  if (fixedRadius === rollingRadius) {
-    rollingRadius += 1;
+function readShapeSelection() {
+  return {
+    fixedPieceId: ui.fixedPieceSelect?.value || SHAPE_RANDOM_VALUE,
+    wheelId: ui.wheelSelect?.value || SHAPE_RANDOM_VALUE,
+    penHoleId: ui.penHoleSelect?.value || SHAPE_RANDOM_VALUE,
+  };
+}
+
+function syncShapeControls() {
+  if (!ui.shapeControls || !ui.fixedPieceSelect || !ui.wheelSelect || !ui.penHoleSelect) return;
+  const classicActive = recipe?.mode === "classic";
+  [ui.fixedPieceSelect, ui.wheelSelect, ui.penHoleSelect].forEach((select) => {
+    select.disabled = !classicActive;
+  });
+  ui.shapeControls.classList.toggle("is-disabled", !classicActive);
+
+  if (!classicActive || !recipe.shape) return;
+  ui.fixedPieceSelect.value = recipe.shape.fixedPieceId;
+  ui.wheelSelect.value = recipe.shape.wheelId;
+  ui.penHoleSelect.value = recipe.shape.penHoleId;
+}
+
+function resolveClassicShape(selection, rng) {
+  return {
+    fixedPieceId: resolveShapeChoice(selection?.fixedPieceId, FIXED_PIECES, rng),
+    wheelId: resolveShapeChoice(selection?.wheelId, ROLLING_WHEELS, rng),
+    penHoleId: resolveShapeChoice(selection?.penHoleId, PEN_HOLES, rng),
+  };
+}
+
+function resolveShapeChoice(value, definitions, rng) {
+  if (value && value !== SHAPE_RANDOM_VALUE && definitions.some((item) => item.id === value)) {
+    return value;
   }
+  return definitions[randomInt(rng, 0, definitions.length - 1)].id;
+}
+
+function normalizeClassicShape(sourceShape, params) {
+  const inferred = shapeFromClassicParams(params);
+  const fixedPieceId = FIXED_PIECE_BY_ID[sourceShape?.fixedPieceId]
+    ? sourceShape.fixedPieceId
+    : inferred.fixedPieceId;
+  const wheelId = ROLLING_WHEEL_BY_ID[sourceShape?.wheelId] ? sourceShape.wheelId : inferred.wheelId;
+  const penHoleId = PEN_HOLE_BY_ID[sourceShape?.penHoleId] ? sourceShape.penHoleId : inferred.penHoleId;
+
+  return { fixedPieceId, wheelId, penHoleId };
+}
+
+function shapeFromClassicParams(params = {}) {
+  const variant = params.variant === "epitrochoid" ? "epitrochoid" : "hypotrochoid";
+  const matchingPieces = FIXED_PIECES.filter((piece) => piece.variant === variant);
+  const fixedPiece = closestBy(matchingPieces, params.fixedRadius || matchingPieces[0].radius, "radius");
+  const wheel = closestBy(ROLLING_WHEELS, params.rollingRadius || ROLLING_WHEELS[0].radius, "radius");
+  const penRatio = wheel.radius > 0 ? (params.penDistance || wheel.radius * 0.62) / wheel.radius : 0.62;
+  const penHole = closestBy(PEN_HOLES, penRatio, "ratio");
+
+  return {
+    fixedPieceId: fixedPiece.id,
+    wheelId: wheel.id,
+    penHoleId: penHole.id,
+  };
+}
+
+function normalizeClassicParams(params = {}) {
+  const fixedRadius = Number(params.fixedRadius);
+  const rollingRadius = Number(params.rollingRadius);
+  const tMax = Number(params.tMax);
+  const safeParams = {
+    ...params,
+    variant: params.variant === "epitrochoid" ? "epitrochoid" : "hypotrochoid",
+    fixedRadius: Number.isFinite(fixedRadius) ? fixedRadius : 96,
+    rollingRadius: Number.isFinite(rollingRadius) ? rollingRadius : 40,
+    penDistance: Number.isFinite(Number(params.penDistance)) ? Number(params.penDistance) : 24.8,
+    phase: Number.isFinite(Number(params.phase)) ? Number(params.phase) : 0,
+    rotation: Number.isFinite(Number(params.rotation)) ? Number(params.rotation) : 0,
+    rotationDrift: Number.isFinite(Number(params.rotationDrift)) ? Number(params.rotationDrift) : 0,
+    penWobble: Number.isFinite(Number(params.penWobble)) ? Number(params.penWobble) : 0,
+    wobbleFrequency: Number.isFinite(Number(params.wobbleFrequency)) ? Number(params.wobbleFrequency) : 1,
+    wobblePhase: Number.isFinite(Number(params.wobblePhase)) ? Number(params.wobblePhase) : 0,
+    tMax: Number.isFinite(tMax) ? tMax : TWO_PI_VALUE * 48,
+  };
+
+  if (!Number.isFinite(Number(safeParams.repeatCount)) || Number(safeParams.repeatCount) <= 0) {
+    const closeTurns = clamp(
+      safeParams.rollingRadius / gcd(Math.round(safeParams.fixedRadius), Math.round(safeParams.rollingRadius)),
+      1,
+      64,
+    );
+    safeParams.repeatCount = Math.max(1, Math.round(safeParams.tMax / (TWO_PI_VALUE * closeTurns)));
+  }
+
+  return safeParams;
+}
+
+function normalizeEpicycleParams(params = {}) {
+  const components =
+    Array.isArray(params.components) && params.components.length > 0
+      ? params.components
+      : [{ radius: 1, frequency: 1, phase: 0 }];
+  const safeParams = {
+    ...params,
+    symmetry: Number.isFinite(Number(params.symmetry)) ? Number(params.symmetry) : 4,
+    rotation: Number.isFinite(Number(params.rotation)) ? Number(params.rotation) : 0,
+    rotationDrift: Number.isFinite(Number(params.rotationDrift)) ? Number(params.rotationDrift) : 0,
+    wobbleAmount: Number.isFinite(Number(params.wobbleAmount)) ? Number(params.wobbleAmount) : 0,
+    wobbleFrequency: Number.isFinite(Number(params.wobbleFrequency)) ? Number(params.wobbleFrequency) : 1,
+    wobblePhase: Number.isFinite(Number(params.wobblePhase)) ? Number(params.wobblePhase) : 0,
+    components,
+    tMax: Number.isFinite(Number(params.tMax)) ? Number(params.tMax) : TWO_PI_VALUE * 48,
+  };
+
+  if (!Number.isFinite(Number(safeParams.repeatCount)) || Number(safeParams.repeatCount) <= 0) {
+    safeParams.repeatCount = Math.max(1, Math.round(safeParams.tMax / TWO_PI_VALUE));
+  }
+
+  return safeParams;
+}
+
+function closestBy(items, value, key) {
+  return items.reduce((closest, item) => {
+    return Math.abs(item[key] - value) < Math.abs(closest[key] - value) ? item : closest;
+  }, items[0]);
+}
+
+function makeClassicParams(seed, shapeSelection = DEFAULT_SHAPE_SELECTION) {
+  const rng = mulberry32(seed);
+  const shape = resolveClassicShape(shapeSelection, rng);
+  const fixedPiece = FIXED_PIECE_BY_ID[shape.fixedPieceId];
+  const wheel = ROLLING_WHEEL_BY_ID[shape.wheelId];
+  const penHole = PEN_HOLE_BY_ID[shape.penHoleId];
+  const variant = fixedPiece.variant;
+  const fixedRadius = fixedPiece.radius;
+  const rollingRadius = wheel.radius;
 
   const common = gcd(fixedRadius, rollingRadius);
   const closeTurns = clamp(rollingRadius / common, 2, 12);
   const passCount = randomInt(rng, 24, 64);
-  const penDistance = randomBetween(rng, rollingRadius * 0.42, rollingRadius * 1.42);
+  const penDistance = rollingRadius * penHole.ratio;
   const phase = randomBetween(rng, 0, TWO_PI_VALUE);
   const rotation = randomBetween(rng, 0, TWO_PI_VALUE);
   const rotationDrift = randomBetween(rng, -TWO_PI_VALUE * 2.75, TWO_PI_VALUE * 2.75);
-  const penWobble = randomBetween(rng, 0.06, 0.2);
+  const penWobble = randomBetween(rng, 0.015, 0.085);
   const wobbleFrequency = randomBetween(rng, 2.2, 9.5);
   const wobblePhase = randomBetween(rng, 0, TWO_PI_VALUE);
   const totalSteps = GENERATED_TOTAL_STEPS;
 
   return {
     totalSteps,
+    shape,
     params: {
       variant,
       fixedRadius,
@@ -376,6 +567,7 @@ function makeClassicParams(seed) {
       penWobble: roundForRecipe(penWobble),
       wobbleFrequency: roundForRecipe(wobbleFrequency),
       wobblePhase: roundForRecipe(wobblePhase),
+      repeatCount: passCount,
       tMax: roundForRecipe(TWO_PI_VALUE * closeTurns * passCount),
     },
   };
@@ -420,6 +612,7 @@ function makeEpicycleParams(seed) {
       wobbleFrequency: roundForRecipe(randomBetween(rng, 1.5, 6.5)),
       wobblePhase: roundForRecipe(randomBetween(rng, 0, TWO_PI_VALUE)),
       components,
+      repeatCount: passCount,
       tMax: roundForRecipe(TWO_PI_VALUE * passCount),
     },
   };
@@ -542,57 +735,82 @@ function resizeArtworkCanvas() {
     mount.style.maxWidth = `${canvasSize}px`;
   }
 
-  trailLayer = createGraphics(canvasSize, canvasSize);
-  trailLayer.pixelDensity(1);
+  baseTrailLayer = createGraphics(canvasSize, canvasSize);
+  baseTrailLayer.pixelDensity(1);
+  recentTrailLayer = createGraphics(canvasSize, canvasSize);
+  recentTrailLayer.pixelDensity(1);
   sparkLayer = createGraphics(canvasSize, canvasSize);
   sparkLayer.pixelDensity(1);
   renderTrailToStep(currentStep);
 }
 
 function renderTrailToStep(step) {
-  if (!trailLayer || !recipe || pathPoints.length === 0) return;
-  clearTrail(trailLayer);
-  drawTrailSegment(0, step, trailLayer, canvasSize);
+  if (!baseTrailLayer || !recentTrailLayer || !recipe || pathPoints.length === 0) return;
+  clearTransparentLayer(baseTrailLayer);
+  clearTransparentLayer(recentTrailLayer);
+  drawBaseTrailToStep(step, baseTrailLayer, canvasSize);
+  drawRecentTrailToStep(step, recentTrailLayer, canvasSize);
   renderedStep = step;
   clearSparkles();
   syncProgressUi();
 }
 
-function clearTrail(target) {
+function clearTransparentLayer(target) {
+  target.clear();
+}
+
+function drawTrailCompositeToStep(step, target, size) {
   const palette = activePalette();
   target.push();
   target.background(...palette.background);
   target.pop();
+  drawBaseTrailToStep(step, target, size);
+  drawRecentTrailToStep(step, target, size);
 }
 
-function drawTrailSegment(fromStep, toStep, target, size) {
+function drawBaseTrailToStep(step, target, size) {
+  drawBaseTrailSegment(0, step, target, size);
+}
+
+function drawBaseTrailSegment(fromStep, toStep, target, size) {
   if (!recipe || toStep <= fromStep || pathPoints.length === 0) return;
   const palette = activePalette();
-  const alpha = Math.max(150, palette.alpha);
+  const alpha = trailAlphaForPalette(palette) * PERMANENT_TRAIL_OPACITY;
   const start = clamp(Math.floor(fromStep), 0, recipe.totalSteps);
   const end = clamp(Math.floor(toStep), 0, recipe.totalSteps);
+  drawTrailRange(start, end, target, size, palette, alpha);
+}
 
-  if (end <= TAPER_START_STEP) {
-    drawTrailRange(start, end, target, size, palette, alpha, 1);
-    return;
-  }
+function drawRecentTrailToStep(step, target, size) {
+  if (!recipe || step <= 0 || pathPoints.length === 0) return;
+  const palette = activePalette();
+  const end = clamp(Math.floor(step), 0, recipe.totalSteps);
+  const windowSteps = recentFadeWindowSteps(recipe);
+  const start = Math.max(0, end - windowSteps);
+  const span = end - start;
+  if (span <= 0) return;
 
-  if (start < TAPER_START_STEP) {
-    drawTrailRange(start, TAPER_START_STEP, target, size, palette, alpha, 1);
-  }
+  const targetChunkSteps = Math.max(1, repeatStepCount(recipe) * 0.25);
+  const chunkCount = Math.max(1, Math.min(RECENT_FADE_CHUNKS, Math.ceil(span / targetChunkSteps)));
+  const chunkSize = span / chunkCount;
 
-  let chunkStart = Math.max(start, TAPER_START_STEP);
-  while (chunkStart < end) {
-    const chunkEnd = Math.min(end, chunkStart + TAPER_CHUNK_STEPS);
+  for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
+    const chunkStart = Math.floor(start + chunkSize * chunkIndex);
+    const chunkEnd = Math.min(end, Math.floor(start + chunkSize * (chunkIndex + 1)));
+    if (chunkEnd <= chunkStart) continue;
     const midpoint = (chunkStart + chunkEnd) * 0.5;
-    drawTrailRange(chunkStart, chunkEnd, target, size, palette, alpha, opacityMultiplierForStep(midpoint));
-    chunkStart = chunkEnd;
+    const age = end - midpoint;
+    const opacity = recentTrailOpacityForAge(age, recipe);
+    const alpha = trailAlphaForPalette(palette) * RECENT_TRAIL_OPACITY * opacity;
+    drawTrailRange(chunkStart, chunkEnd, target, size, palette, alpha, RECENT_CHUNK_VERTEX_LIMIT);
   }
 }
 
-function drawTrailRange(start, end, target, size, palette, alpha, opacityMultiplier) {
+function drawTrailRange(start, end, target, size, palette, alpha, maxVertices = MAX_REDRAW_VERTICES) {
   if (end <= start) return;
+  if (alpha <= 0.2) return;
   const darkBackground = isDarkPalette(palette);
+  const coreWeight = Math.max(0.9, size / 820);
 
   target.push();
   target.noFill();
@@ -600,16 +818,16 @@ function drawTrailRange(start, end, target, size, palette, alpha, opacityMultipl
   target.strokeCap(ROUND);
   if (darkBackground) {
     target.drawingContext.save();
-    target.drawingContext.shadowBlur = Math.max(10, size * 0.018);
-    target.drawingContext.shadowColor = rgbaString(palette.points, 0.64 * opacityMultiplier);
-    target.stroke(...palette.points, Math.min(180, alpha + 35) * opacityMultiplier);
-    target.strokeWeight(Math.max(3.2, size / 230));
-    drawPathShape(target, start, end, size);
+    target.drawingContext.shadowBlur = Math.max(2.5, size * 0.006);
+    target.drawingContext.shadowColor = rgbaString(palette.points, Math.min(0.3, alpha / 255));
+    target.stroke(...palette.points, alpha * 0.55);
+    target.strokeWeight(coreWeight);
+    drawPathShape(target, start, end, size, maxVertices);
     target.drawingContext.restore();
   }
-  target.stroke(...palette.points, alpha * opacityMultiplier);
-  target.strokeWeight(Math.max(1.05, size / 780));
-  drawPathShape(target, start, end, size);
+  target.stroke(...palette.points, alpha);
+  target.strokeWeight(coreWeight);
+  drawPathShape(target, start, end, size, maxVertices);
   target.pop();
 }
 
@@ -620,7 +838,11 @@ function advancePlayback() {
   const nextStep = clamp(currentStep + playDirection * stride, 0, recipe.totalSteps);
 
   if (playDirection > 0) {
-    drawTrailSegment(currentStep, nextStep, trailLayer, canvasSize);
+    drawBaseTrailSegment(currentStep, nextStep, baseTrailLayer, canvasSize);
+    clearTransparentLayer(recentTrailLayer);
+    drawRecentTrailToStep(nextStep, recentTrailLayer, canvasSize);
+  } else {
+    renderTrailToStep(nextStep);
   }
 
   currentStep = nextStep;
@@ -638,8 +860,8 @@ function advancePlayback() {
   syncProgressUi();
 }
 
-function drawPathShape(target, start, end, size) {
-  const step = Math.max(1, Math.ceil((end - start) / MAX_REDRAW_VERTICES));
+function drawPathShape(target, start, end, size, maxVertices = MAX_REDRAW_VERTICES) {
+  const step = Math.max(1, Math.ceil((end - start) / maxVertices));
   const halfSize = size * 0.5;
 
   target.beginShape();
@@ -653,29 +875,6 @@ function drawPathShape(target, start, end, size) {
     target.vertex(halfSize + point.x * halfSize, halfSize + point.y * halfSize);
   }
   target.endShape();
-}
-
-function drawActivePoint() {
-  const palette = activePalette();
-  const mapped = mapPathIndexToCanvas(currentStep, canvasSize);
-  const pulse = 1 + Math.sin(frameCount * 0.16) * 0.12;
-  const radius = Math.max(6, canvasSize * 0.01) * pulse;
-  const sparkColor = sparkColorForPalette(palette);
-  const opacityMultiplier = opacityMultiplierForStep(currentStep);
-
-  push();
-  drawingContext.save();
-  drawingContext.shadowBlur = Math.max(12, canvasSize * 0.022);
-  drawingContext.shadowColor = rgbaString(sparkColor, 0.9 * opacityMultiplier);
-  noFill();
-  stroke(...sparkColor, 235 * opacityMultiplier);
-  strokeWeight(Math.max(1.2, canvasSize / 520));
-  circle(mapped.x, mapped.y, radius * 2.6);
-  fill(...sparkColor, 245 * opacityMultiplier);
-  noStroke();
-  circle(mapped.x, mapped.y, radius);
-  drawingContext.restore();
-  pop();
 }
 
 function mapPathIndexToCanvas(index, size) {
@@ -907,8 +1106,7 @@ function savePreview() {
   if (!recipe || pathPoints.length === 0) return;
   const preview = createGraphics(PREVIEW_EXPORT_SIZE, PREVIEW_EXPORT_SIZE);
   preview.pixelDensity(1);
-  clearPreviewGraphics(preview, PREVIEW_EXPORT_SIZE);
-  drawTrailSegment(0, currentStep, preview, PREVIEW_EXPORT_SIZE);
+  drawTrailCompositeToStep(currentStep, preview, PREVIEW_EXPORT_SIZE);
   drawPreviewCursor(preview, PREVIEW_EXPORT_SIZE);
   drawWatermark(preview, PREVIEW_EXPORT_SIZE);
 
@@ -921,27 +1119,19 @@ function savePreview() {
   }, "image/png");
 }
 
-function clearPreviewGraphics(target) {
-  const palette = activePalette();
-  target.push();
-  target.background(...palette.background);
-  target.pop();
-}
-
 function drawPreviewCursor(target, size) {
   const palette = activePalette();
   const mapped = mapPathIndexToCanvas(currentStep, size);
   const sparkColor = sparkColorForPalette(palette);
-  const opacityMultiplier = opacityMultiplierForStep(currentStep);
   target.push();
   target.drawingContext.save();
   target.drawingContext.shadowBlur = Math.max(14, size * 0.02);
-  target.drawingContext.shadowColor = rgbaString(sparkColor, 0.9 * opacityMultiplier);
+  target.drawingContext.shadowColor = rgbaString(sparkColor, 0.9);
   target.noFill();
-  target.stroke(...sparkColor, 230 * opacityMultiplier);
+  target.stroke(...sparkColor, 230);
   target.strokeWeight(2);
   target.circle(mapped.x, mapped.y, 22);
-  target.fill(...sparkColor, 245 * opacityMultiplier);
+  target.fill(...sparkColor, 245);
   target.noStroke();
   target.circle(mapped.x, mapped.y, 10);
   target.drawingContext.restore();
@@ -1003,7 +1193,7 @@ function updateSparkles() {
     }
 
     const progress = spark.life / spark.maxLife;
-    const alpha = 220 * progress * progress * spark.opacityMultiplier;
+    const alpha = 220 * progress * progress;
     sparkLayer.noStroke();
     sparkLayer.fill(...spark.color, alpha);
     sparkLayer.circle(spark.x, spark.y, spark.size * (0.45 + progress));
@@ -1017,7 +1207,6 @@ function emitSparkles(palette) {
   const angle = Math.atan2(mapped.y - previousMapped.y, mapped.x - previousMapped.x);
   const count = isDarkPalette(palette) ? 5 : 3;
   const color = sparkColorForPalette(palette);
-  const opacityMultiplier = opacityMultiplierForStep(currentStep);
 
   for (let index = 0; index < count; index += 1) {
     const sideSpray = random(-1.9, 1.9);
@@ -1031,9 +1220,8 @@ function emitSparkles(palette) {
       vy: Math.sin(direction) * speed,
       life,
       maxLife: life,
-      size: random(canvasSize * 0.004, canvasSize * 0.011),
+      size: random(canvasSize * 0.0026, canvasSize * 0.0072),
       color,
-      opacityMultiplier,
     });
   }
 
@@ -1069,14 +1257,45 @@ function rgbaString(rgb, alpha) {
   return `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${alpha})`;
 }
 
-function opacityMultiplierForStep(step) {
-  if (step <= TAPER_START_STEP) {
-    return 1;
+function trailAlphaForPalette(palette) {
+  return clamp(Math.max(MIN_TRAIL_ALPHA, Number(palette.alpha)), MIN_TRAIL_ALPHA, 220);
+}
+
+function recentFadeWindowSteps(activeRecipe) {
+  return repeatStepCount(activeRecipe) * (FRESH_TRAIL_REPEATS + RECENT_FADE_REPEATS);
+}
+
+function recentTrailOpacityForAge(ageSteps, activeRecipe) {
+  const freshSteps = repeatStepCount(activeRecipe) * FRESH_TRAIL_REPEATS;
+  if (ageSteps <= freshSteps) return 1;
+
+  const fadeSteps = Math.max(1, repeatStepCount(activeRecipe) * RECENT_FADE_REPEATS);
+  const fadeProgress = clamp((ageSteps - freshSteps) / fadeSteps, 0, 1);
+  return Math.pow(1 - fadeProgress, 1.15);
+}
+
+function repeatStepCount(activeRecipe) {
+  const repeatCount = Math.max(1, Number(activeRecipe.params?.repeatCount) || inferRepeatCount(activeRecipe));
+  return Math.max(1, Math.round(activeRecipe.totalSteps / repeatCount));
+}
+
+function inferRepeatCount(activeRecipe) {
+  if (activeRecipe.mode === "epicycle") {
+    return Math.max(1, Math.round((activeRecipe.params?.tMax || TWO_PI_VALUE) / TWO_PI_VALUE));
   }
 
-  const progress = clamp((step - TAPER_START_STEP) / (MAX_TOTAL_STEPS - TAPER_START_STEP), 0, 1);
-  const easedProgress = progress * progress;
-  return 1 - easedProgress * (1 - MIN_TAPER_OPACITY);
+  const params = activeRecipe.params || {};
+  const closeTurns = clamp(
+    (params.rollingRadius || 1) / gcd(Math.round(params.fixedRadius || 1), Math.round(params.rollingRadius || 1)),
+    1,
+    64,
+  );
+  return Math.max(1, Math.round((params.tMax || TWO_PI_VALUE) / (TWO_PI_VALUE * closeTurns)));
+}
+
+function syncArtworkBackground(palette) {
+  if (!ui.canvasStage || !palette) return;
+  ui.canvasStage.style.setProperty("--artwork-background", `rgb(${palette.background.join(",")})`);
 }
 
 function emptyPathPoints() {
