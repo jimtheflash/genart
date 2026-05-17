@@ -20,12 +20,10 @@ const DISPLAY_FRAME_RATE = 60;
 const RECIPE_VERSION = 2;
 const SHAPE_RANDOM_VALUE = "random";
 const MIN_TRAIL_ALPHA = 150;
-const PERMANENT_TRAIL_OPACITY = 0.1;
-const RECENT_TRAIL_OPACITY = 0.9;
-const FRESH_TRAIL_REPEATS = 1;
-const RECENT_FADE_REPEATS = 6;
-const RECENT_FADE_CHUNKS = 18;
-const RECENT_CHUNK_VERTEX_LIMIT = 9000;
+const TRAIL_OPACITY_MIN = 0.1;
+const TRAIL_OPACITY_MAX = 1.0;
+const TRAIL_CHUNK_COUNT = 24;
+const TRAIL_CHUNK_VERTEX_LIMIT = 9000;
 const FIXED_PIECES = [
   { id: "ring96", label: "Ring 96", radius: 96, variant: "hypotrochoid" },
   { id: "ring120", label: "Ring 120", radius: 120, variant: "hypotrochoid" },
@@ -58,8 +56,7 @@ let ui = {};
 let palettes = FALLBACK_PALETTES.slice();
 let recipe = null;
 let pathPoints = emptyPathPoints();
-let baseTrailLayer = null;
-let recentTrailLayer = null;
+let trailLayer = null;
 let sparkLayer = null;
 let sparkles = [];
 let canvasSize = 720;
@@ -90,7 +87,7 @@ function setup() {
 }
 
 function draw() {
-  if (!recipe || pathPoints.length === 0 || !baseTrailLayer || !recentTrailLayer) {
+  if (!recipe || pathPoints.length === 0 || !trailLayer) {
     background(245, 243, 238);
     return;
   }
@@ -102,8 +99,8 @@ function draw() {
   const palette = activePalette();
   syncArtworkBackground(palette);
   background(...palette.background);
-  image(baseTrailLayer, 0, 0);
-  image(recentTrailLayer, 0, 0);
+  renderGradientTrailToStep(currentStep, trailLayer, canvasSize);
+  image(trailLayer, 0, 0);
   updateSparkles();
   image(sparkLayer, 0, 0);
   syncPlaybackUi();
@@ -735,28 +732,19 @@ function resizeArtworkCanvas() {
     mount.style.maxWidth = `${canvasSize}px`;
   }
 
-  baseTrailLayer = createGraphics(canvasSize, canvasSize);
-  baseTrailLayer.pixelDensity(1);
-  recentTrailLayer = createGraphics(canvasSize, canvasSize);
-  recentTrailLayer.pixelDensity(1);
+  trailLayer = createGraphics(canvasSize, canvasSize);
+  trailLayer.pixelDensity(1);
   sparkLayer = createGraphics(canvasSize, canvasSize);
   sparkLayer.pixelDensity(1);
   renderTrailToStep(currentStep);
 }
 
 function renderTrailToStep(step) {
-  if (!baseTrailLayer || !recentTrailLayer || !recipe || pathPoints.length === 0) return;
-  clearTransparentLayer(baseTrailLayer);
-  clearTransparentLayer(recentTrailLayer);
-  drawBaseTrailToStep(step, baseTrailLayer, canvasSize);
-  drawRecentTrailToStep(step, recentTrailLayer, canvasSize);
+  if (!trailLayer || !recipe || pathPoints.length === 0) return;
+  renderGradientTrailToStep(step, trailLayer, canvasSize);
   renderedStep = step;
   clearSparkles();
   syncProgressUi();
-}
-
-function clearTransparentLayer(target) {
-  target.clear();
 }
 
 function drawTrailCompositeToStep(step, target, size) {
@@ -764,45 +752,35 @@ function drawTrailCompositeToStep(step, target, size) {
   target.push();
   target.background(...palette.background);
   target.pop();
-  drawBaseTrailToStep(step, target, size);
-  drawRecentTrailToStep(step, target, size);
+  renderGradientTrailToStep(step, target, size);
 }
 
-function drawBaseTrailToStep(step, target, size) {
-  drawBaseTrailSegment(0, step, target, size);
-}
+function renderGradientTrailToStep(step, target, size) {
+  if (!target || !recipe || pathPoints.length === 0) return;
+  target.clear();
+  if (step <= 0) return;
 
-function drawBaseTrailSegment(fromStep, toStep, target, size) {
-  if (!recipe || toStep <= fromStep || pathPoints.length === 0) return;
   const palette = activePalette();
-  const alpha = trailAlphaForPalette(palette) * PERMANENT_TRAIL_OPACITY;
-  const start = clamp(Math.floor(fromStep), 0, recipe.totalSteps);
-  const end = clamp(Math.floor(toStep), 0, recipe.totalSteps);
-  drawTrailRange(start, end, target, size, palette, alpha);
-}
-
-function drawRecentTrailToStep(step, target, size) {
-  if (!recipe || step <= 0 || pathPoints.length === 0) return;
-  const palette = activePalette();
+  const totalSteps = Math.max(1, recipe.totalSteps);
   const end = clamp(Math.floor(step), 0, recipe.totalSteps);
-  const windowSteps = recentFadeWindowSteps(recipe);
-  const start = Math.max(0, end - windowSteps);
-  const span = end - start;
-  if (span <= 0) return;
+  if (end <= 0) return;
 
-  const targetChunkSteps = Math.max(1, repeatStepCount(recipe) * 0.25);
-  const chunkCount = Math.max(1, Math.min(RECENT_FADE_CHUNKS, Math.ceil(span / targetChunkSteps)));
-  const chunkSize = span / chunkCount;
+  const baseAlpha = trailAlphaForPalette(palette);
+  const chunkCount = Math.max(1, Math.min(TRAIL_CHUNK_COUNT, end));
+  const chunkSize = end / chunkCount;
 
   for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
-    const chunkStart = Math.floor(start + chunkSize * chunkIndex);
-    const chunkEnd = Math.min(end, Math.floor(start + chunkSize * (chunkIndex + 1)));
+    const chunkStart = Math.floor(chunkSize * chunkIndex);
+    const rawChunkEnd = Math.floor(chunkSize * (chunkIndex + 1));
+    const chunkEnd = Math.min(end, chunkIndex === chunkCount - 1 ? end : rawChunkEnd + 1);
     if (chunkEnd <= chunkStart) continue;
+
     const midpoint = (chunkStart + chunkEnd) * 0.5;
     const age = end - midpoint;
-    const opacity = recentTrailOpacityForAge(age, recipe);
-    const alpha = trailAlphaForPalette(palette) * RECENT_TRAIL_OPACITY * opacity;
-    drawTrailRange(chunkStart, chunkEnd, target, size, palette, alpha, RECENT_CHUNK_VERTEX_LIMIT);
+    const ageRatio = clamp(age / totalSteps, 0, 1);
+    const opacity = TRAIL_OPACITY_MAX - ageRatio * (TRAIL_OPACITY_MAX - TRAIL_OPACITY_MIN);
+    const alpha = baseAlpha * opacity;
+    drawTrailRange(chunkStart, chunkEnd, target, size, palette, alpha, TRAIL_CHUNK_VERTEX_LIMIT);
   }
 }
 
@@ -810,7 +788,7 @@ function drawTrailRange(start, end, target, size, palette, alpha, maxVertices = 
   if (end <= start) return;
   if (alpha <= 0.2) return;
   const darkBackground = isDarkPalette(palette);
-  const coreWeight = Math.max(0.9, size / 820);
+  const coreWeight = Math.max(0.9, size / 820) * 1.1;
 
   target.push();
   target.noFill();
@@ -837,14 +815,6 @@ function advancePlayback() {
   const stride = playbackStride();
   const nextStep = clamp(currentStep + playDirection * stride, 0, recipe.totalSteps);
 
-  if (playDirection > 0) {
-    drawBaseTrailSegment(currentStep, nextStep, baseTrailLayer, canvasSize);
-    clearTransparentLayer(recentTrailLayer);
-    drawRecentTrailToStep(nextStep, recentTrailLayer, canvasSize);
-  } else {
-    renderTrailToStep(nextStep);
-  }
-
   currentStep = nextStep;
   renderedStep = nextStep;
 
@@ -854,7 +824,7 @@ function advancePlayback() {
   } else if (currentStep <= 0) {
     playDirection = 1;
     currentStep = 0;
-    renderTrailToStep(0);
+    clearSparkles();
   }
 
   syncProgressUi();
@@ -1220,7 +1190,7 @@ function emitSparkles(palette) {
       vy: Math.sin(direction) * speed,
       life,
       maxLife: life,
-      size: random(canvasSize * 0.0026, canvasSize * 0.0072),
+      size: random(canvasSize * 0.0013, canvasSize * 0.0036),
       color,
     });
   }
@@ -1259,38 +1229,6 @@ function rgbaString(rgb, alpha) {
 
 function trailAlphaForPalette(palette) {
   return clamp(Math.max(MIN_TRAIL_ALPHA, Number(palette.alpha)), MIN_TRAIL_ALPHA, 220);
-}
-
-function recentFadeWindowSteps(activeRecipe) {
-  return repeatStepCount(activeRecipe) * (FRESH_TRAIL_REPEATS + RECENT_FADE_REPEATS);
-}
-
-function recentTrailOpacityForAge(ageSteps, activeRecipe) {
-  const freshSteps = repeatStepCount(activeRecipe) * FRESH_TRAIL_REPEATS;
-  if (ageSteps <= freshSteps) return 1;
-
-  const fadeSteps = Math.max(1, repeatStepCount(activeRecipe) * RECENT_FADE_REPEATS);
-  const fadeProgress = clamp((ageSteps - freshSteps) / fadeSteps, 0, 1);
-  return Math.pow(1 - fadeProgress, 1.15);
-}
-
-function repeatStepCount(activeRecipe) {
-  const repeatCount = Math.max(1, Number(activeRecipe.params?.repeatCount) || inferRepeatCount(activeRecipe));
-  return Math.max(1, Math.round(activeRecipe.totalSteps / repeatCount));
-}
-
-function inferRepeatCount(activeRecipe) {
-  if (activeRecipe.mode === "epicycle") {
-    return Math.max(1, Math.round((activeRecipe.params?.tMax || TWO_PI_VALUE) / TWO_PI_VALUE));
-  }
-
-  const params = activeRecipe.params || {};
-  const closeTurns = clamp(
-    (params.rollingRadius || 1) / gcd(Math.round(params.fixedRadius || 1), Math.round(params.rollingRadius || 1)),
-    1,
-    64,
-  );
-  return Math.max(1, Math.round((params.tMax || TWO_PI_VALUE) / (TWO_PI_VALUE * closeTurns)));
 }
 
 function syncArtworkBackground(palette) {
