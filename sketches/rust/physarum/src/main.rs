@@ -16,11 +16,17 @@
 // Output is a grayscale-to-color mapping of `-ln(env + epsilon)` so that
 // recent / heavily trafficked cells read as the bright end of the gradient.
 //
+// Dimensions default to image_config.yml at the repo root (16 in x 16 in at
+// 300 dpi = 4800 x 4800 px). Override with --width-inches / --height-inches
+// / --dpi, or point --image-config at a different YAML.
+//
 // Usage:
-//   cargo run --release -- --preset pollack --size 1000 \
-//       --out ../../../outputs/physarum/pollack_small.png
-//   cargo run --release -- --preset snake --size 1000 \
+//   cargo run --release -- --preset pollack \
+//       --out ../../../outputs/physarum/pollack_default.png
+//   cargo run --release -- --preset snake --width-inches 4 --height-inches 4 \
 //       --out ../../../outputs/physarum/snake_small.png
+
+mod image_config;
 
 use std::f64::consts::PI;
 use std::path::PathBuf;
@@ -62,9 +68,21 @@ struct Cli {
     #[arg(long, value_enum)]
     preset: Option<Preset>,
 
-    /// Side length in pixels (square image / env grid).
-    #[arg(long, default_value_t = 1000)]
-    size: u32,
+    /// Override the canvas width (inches). Falls back to image_config.yml.
+    #[arg(long)]
+    width_inches: Option<f64>,
+
+    /// Override the canvas height (inches). Falls back to image_config.yml.
+    #[arg(long)]
+    height_inches: Option<f64>,
+
+    /// Override the print resolution (dots per inch). Falls back to image_config.yml.
+    #[arg(long)]
+    dpi: Option<u32>,
+
+    /// Path to the YAML defaults file.
+    #[arg(long, default_value = "../../../image_config.yml")]
+    image_config: PathBuf,
 
     /// Number of agents.
     #[arg(long, default_value_t = 6789)]
@@ -119,9 +137,32 @@ fn main() {
     let mut cli = Cli::parse();
     apply_preset(&mut cli);
 
+    let cfg = image_config::load(&cli.image_config, "physarum");
+    let resolved = image_config::Resolved {
+        width_inches: cli.width_inches.unwrap_or(cfg.width_inches),
+        height_inches: cli.height_inches.unwrap_or(cfg.height_inches),
+        dpi: cli.dpi.unwrap_or(cfg.dpi),
+    };
+    let width_px = resolved.width_px();
+    let height_px = resolved.height_px();
+
+    if width_px != height_px {
+        eprintln!(
+            "error: physarum currently supports square canvases only; got {}x{} px ({} in x {} in @ {} dpi). \
+             Set --width-inches and --height-inches to the same value, or edit image_config.yml.",
+            width_px, height_px, resolved.width_inches, resolved.height_inches, resolved.dpi,
+        );
+        std::process::exit(2);
+    }
+    let size = width_px;
+
     println!(
-        "running physarum: size={} agents={} iters={} decay={} deposit={} step={} RA={}° SO={} FL={}° preset={:?} seed={}",
-        cli.size,
+        "running physarum: {}x{} px ({} in x {} in @ {} dpi) agents={} iters={} decay={} deposit={} step={} RA={}° SO={} FL={}° preset={:?} seed={}",
+        size,
+        size,
+        resolved.width_inches,
+        resolved.height_inches,
+        resolved.dpi,
         cli.agents,
         cli.iters,
         cli.decay,
@@ -135,13 +176,13 @@ fn main() {
     );
 
     let started = Instant::now();
-    let env = simulate(&cli);
+    let env = simulate(&cli, size);
     let sim_ms = started.elapsed().as_millis();
 
-    let pixels = colorize(&env, cli.size as usize, cli.gradient);
+    let pixels = colorize(&env, size as usize, cli.gradient);
 
     let buffer: ImageBuffer<Rgb<u8>, Vec<u8>> =
-        ImageBuffer::from_raw(cli.size, cli.size, pixels).expect("buffer dimensions mismatch");
+        ImageBuffer::from_raw(size, size, pixels).expect("buffer dimensions mismatch");
 
     if let Some(parent) = cli.out.parent() {
         if !parent.as_os_str().is_empty() {
@@ -194,8 +235,8 @@ struct Agents {
     h: Vec<f64>,
 }
 
-fn simulate(cli: &Cli) -> Vec<f64> {
-    let size = cli.size as usize;
+fn simulate(cli: &Cli, side_px: u32) -> Vec<f64> {
+    let size = side_px as usize;
     let mut env = vec![0.0_f64; size * size];
 
     // Magnetic-ring prelude: matches the R "magnetic disc" snippet that

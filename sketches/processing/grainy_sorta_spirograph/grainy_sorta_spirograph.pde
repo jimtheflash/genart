@@ -5,7 +5,7 @@
 // Controls:
 // n: roll a new attractor and restart the preview
 // s: save the current preview PNG
-// e: render and save a 4800 x 4800 print PNG (high-iteration)
+// e: render and save a print PNG (dimensions from image_config.yml, high-iteration)
 //
 // Math (mathematically a Clifford attractor; the R repo just called it spirograph-y):
 //   nextX = sin(a * y) + c * cos(a * x)
@@ -18,10 +18,8 @@ import java.io.PrintWriter;
 
 final String SKETCH_NAME = "grainy_sorta_spirograph";
 final String PALETTE_FILE = "../../../palettes.yml";
+final String IMAGE_CONFIG_FILE = "../../../image_config.yml";
 final int PREVIEW_SIZE = 900;
-final int EXPORT_SIZE = 4800;
-final int EXPORT_DPI = 300;
-final float EXPORT_INCHES = 16.0;
 final int PREVIEW_POINTS = 4000000;
 final int EXPORT_POINTS = 9900000;
 final int ITERATIONS_PER_FRAME = 120000;
@@ -36,6 +34,7 @@ AttractorState activeState;
 DrawCursor previewCursor;
 PGraphics previewCanvas;
 Palette[] palettes;
+ImageConfig imageConfig;
 int previewPointsDrawn = 0;
 
 void settings() {
@@ -46,7 +45,9 @@ void settings() {
 
 void setup() {
   palettes = loadPalettes();
+  imageConfig = loadImageConfig(SKETCH_NAME);
   previewCanvas = createGraphics(PREVIEW_SIZE, PREVIEW_SIZE, JAVA2D);
+  println("Print export configured for " + imageConfig.widthInches + " in x " + imageConfig.heightInches + " in at " + imageConfig.dpi + " dpi (" + imageConfig.widthPx + " x " + imageConfig.heightPx + " px).");
   startNewAttractor();
 }
 
@@ -59,7 +60,7 @@ void draw() {
   }
 
   previewCanvas.beginDraw();
-  drawAttractorPoints(previewCanvas, activeState, previewCursor, pointsThisFrame, PREVIEW_SIZE);
+  drawAttractorPoints(previewCanvas, activeState, previewCursor, pointsThisFrame, PREVIEW_SIZE, PREVIEW_SIZE);
   previewCanvas.endDraw();
   image(previewCanvas, 0, 0);
   previewPointsDrawn += pointsThisFrame;
@@ -87,7 +88,7 @@ void startNewAttractor() {
   println("Grainy sorta spirograph ready.");
   println("  points=" + activeState.pointCount + " palette=" + palettes[activeState.paletteIndex].name);
   println("  a=" + activeState.a + " b=" + activeState.b + " c=" + activeState.c + " d=" + activeState.d);
-  println("  Press e for a 4800 x 4800 print export, s for preview PNG, n for a new attractor.");
+  println("  Press e for a " + imageConfig.widthPx + " x " + imageConfig.heightPx + " print export, s for preview PNG, n for a new attractor.");
 }
 
 AttractorState makeRandomState(int paletteIndex, int pointCount) {
@@ -143,17 +144,19 @@ void resetPreview() {
 }
 
 void renderPrintExport() {
+  int widthPx = imageConfig.widthPx;
+  int heightPx = imageConfig.heightPx;
   String outputFolder = ensureOutputFolder();
   String stamp = timestamp();
-  String baseName = SKETCH_NAME + "-" + EXPORT_SIZE + "x" + EXPORT_SIZE + "-" + stamp;
+  String baseName = SKETCH_NAME + "-" + widthPx + "x" + heightPx + "-" + stamp;
   String basePath = uniqueBasePath(outputFolder, baseName);
   String pngPath = basePath + ".png";
   String metadataPath = basePath + ".txt";
 
-  println("Starting print export at " + EXPORT_SIZE + " x " + EXPORT_SIZE + " px with " + EXPORT_POINTS + " points.");
+  println("Starting print export at " + widthPx + " x " + heightPx + " px with " + EXPORT_POINTS + " points.");
   println("The Processing window may pause while the high-resolution PNG renders.");
 
-  PGraphics printCanvas = createGraphics(EXPORT_SIZE, EXPORT_SIZE, JAVA2D);
+  PGraphics printCanvas = createGraphics(widthPx, heightPx, JAVA2D);
   DrawCursor exportCursor = new DrawCursor(activeState.seedX, activeState.seedY);
   skipWarmup(activeState, exportCursor);
 
@@ -165,7 +168,7 @@ void renderPrintExport() {
   int nextProgress = EXPORT_PROGRESS_POINTS;
   while (rendered < EXPORT_POINTS) {
     int pointsThisChunk = min(EXPORT_CHUNK_POINTS, EXPORT_POINTS - rendered);
-    drawAttractorPoints(printCanvas, activeState, exportCursor, pointsThisChunk, EXPORT_SIZE);
+    drawAttractorPoints(printCanvas, activeState, exportCursor, pointsThisChunk, widthPx, heightPx);
     rendered += pointsThisChunk;
 
     if (rendered >= nextProgress || rendered >= EXPORT_POINTS) {
@@ -176,7 +179,7 @@ void renderPrintExport() {
 
   printCanvas.endDraw();
   printCanvas.save(pngPath);
-  saveMetadata(metadataPath, activeState, EXPORT_POINTS, EXPORT_SIZE);
+  saveMetadata(metadataPath, activeState, EXPORT_POINTS, widthPx, heightPx);
 
   println("Saved print PNG: " + pngPath);
   println("Saved metadata: " + metadataPath);
@@ -191,12 +194,14 @@ void savePreview() {
   println("Saved preview PNG: " + pngPath);
 }
 
-void drawAttractorPoints(PGraphics target, AttractorState state, DrawCursor cursor, int pointCount, int targetSize) {
-  float fitScale = fitScaleForSize(state, targetSize);
+void drawAttractorPoints(PGraphics target, AttractorState state, DrawCursor cursor, int pointCount, int targetW, int targetH) {
+  // fitScaleForCanvas constrains both axes independently; on non-square canvases the
+  // attractor still fits but is centered (letterboxed on the longer axis).
+  float fitScale = fitScaleForCanvas(state, targetW, targetH);
   Palette palette = palettes[state.paletteIndex];
 
   target.pushMatrix();
-  target.translate(targetSize * 0.5, targetSize * 0.5);
+  target.translate(targetW * 0.5, targetH * 0.5);
   target.scale(fitScale);
   target.translate(-state.centerX, -state.centerY);
   target.strokeWeight(SCREEN_STROKE_WEIGHT / fitScale);
@@ -242,10 +247,10 @@ void clearBackground(PGraphics target, int paletteIndex) {
   target.popStyle();
 }
 
-float fitScaleForSize(AttractorState state, int targetSize) {
+float fitScaleForCanvas(AttractorState state, int targetW, int targetH) {
   float rangeX = max(state.maxX - state.minX, 0.001);
   float rangeY = max(state.maxY - state.minY, 0.001);
-  return min((targetSize * state.fitMargin) / rangeX, (targetSize * state.fitMargin) / rangeY);
+  return min((targetW * state.fitMargin) / rangeX, (targetH * state.fitMargin) / rangeY);
 }
 
 FitBounds measureBounds(float candidateA, float candidateB, float candidateC, float candidateD, float seedX, float seedY) {
@@ -475,13 +480,13 @@ String timestamp() {
   return nf(year(), 4) + nf(month(), 2) + nf(day(), 2) + "-" + nf(hour(), 2) + nf(minute(), 2) + nf(second(), 2);
 }
 
-void saveMetadata(String path, AttractorState state, int pointCount, int pixelSize) {
+void saveMetadata(String path, AttractorState state, int pointCount, int pixelWidth, int pixelHeight) {
   PrintWriter writer = createWriter(path);
   writer.println("sketch=" + SKETCH_NAME);
   writer.println("file_type=PNG");
-  writer.println("pixel_size=" + pixelSize + "x" + pixelSize);
-  writer.println("intended_print_size_inches=" + EXPORT_INCHES + "x" + EXPORT_INCHES);
-  writer.println("dpi=" + EXPORT_DPI);
+  writer.println("pixel_size=" + pixelWidth + "x" + pixelHeight);
+  writer.println("intended_print_size_inches=" + imageConfig.widthInches + "x" + imageConfig.heightInches);
+  writer.println("dpi=" + imageConfig.dpi);
   writer.println("point_count=" + pointCount);
   writer.println("a=" + state.a);
   writer.println("b=" + state.b);
@@ -550,4 +555,159 @@ class FitBounds {
   float maxX;
   float minY;
   float maxY;
+}
+
+class ImageConfig {
+  float widthInches;
+  float heightInches;
+  int dpi;
+  int widthPx;
+  int heightPx;
+}
+
+ImageConfig loadImageConfig(String sketchName) {
+  String configPath = sketchPath(IMAGE_CONFIG_FILE);
+  String[] lines = null;
+
+  try {
+    lines = loadStrings(configPath);
+  } catch (Exception e) {
+    lines = null;
+  }
+
+  if (lines == null) {
+    println("Could not read image config at " + configPath + ". Falling back to 16 in x 16 in at 300 dpi.");
+    return fallbackImageConfig();
+  }
+
+  ImageConfig cfg = new ImageConfig();
+  cfg.widthInches = 16.0;
+  cfg.heightInches = 16.0;
+  cfg.dpi = 300;
+
+  String section = "";
+  for (int i = 0; i < lines.length; i++) {
+    String raw = lines[i];
+    String trimmed = raw.trim();
+    if (trimmed.length() == 0 || trimmed.startsWith("#")) continue;
+
+    int indent = leadingSpaces(raw);
+    if (indent == 0) {
+      if (trimmed.startsWith("dpi:")) {
+        cfg.dpi = parseIntValue(valueAfterColon(trimmed), cfg.dpi);
+      } else if (trimmed.startsWith("square:")) {
+        section = "square";
+      } else if (trimmed.startsWith("sketches:")) {
+        section = "sketches";
+      } else if (trimmed.startsWith("rectangular:")) {
+        section = "rectangular";
+      } else {
+        section = "";
+      }
+    } else if (section.equals("square") && indent == 2) {
+      applyKeyValue(trimmed, cfg);
+    }
+  }
+
+  applySketchOverride(lines, sketchName, cfg);
+
+  cfg.widthPx = round(cfg.widthInches * cfg.dpi);
+  cfg.heightPx = round(cfg.heightInches * cfg.dpi);
+  return cfg;
+}
+
+void applySketchOverride(String[] lines, String sketchName, ImageConfig cfg) {
+  boolean inSketches = false;
+  boolean inEntry = false;
+  String prefix = sketchName + ":";
+
+  for (int i = 0; i < lines.length; i++) {
+    String raw = lines[i];
+    String trimmed = raw.trim();
+    if (trimmed.length() == 0 || trimmed.startsWith("#")) continue;
+
+    int indent = leadingSpaces(raw);
+
+    if (indent == 0) {
+      inSketches = trimmed.startsWith("sketches:");
+      inEntry = false;
+      continue;
+    }
+
+    if (!inSketches) continue;
+
+    if (indent == 2) {
+      if (trimmed.startsWith(prefix)) {
+        String rest = trimmed.substring(prefix.length()).trim();
+        if (rest.startsWith("{") && rest.endsWith("}")) {
+          String inner = rest.substring(1, rest.length() - 1).trim();
+          parseInlineMap(inner, cfg);
+          inEntry = false;
+        } else if (rest.length() == 0) {
+          inEntry = true;
+        } else {
+          inEntry = false;
+        }
+      } else {
+        inEntry = false;
+      }
+    } else if (indent == 4 && inEntry) {
+      applyKeyValue(trimmed, cfg);
+    }
+  }
+}
+
+void parseInlineMap(String inner, ImageConfig cfg) {
+  String[] parts = split(inner, ',');
+  for (int i = 0; i < parts.length; i++) {
+    applyKeyValue(parts[i].trim(), cfg);
+  }
+}
+
+void applyKeyValue(String kv, ImageConfig cfg) {
+  int colon = kv.indexOf(':');
+  if (colon < 0) return;
+  String key = kv.substring(0, colon).trim();
+  String value = kv.substring(colon + 1).trim();
+  if (key.equals("width_inches")) {
+    cfg.widthInches = parseFloatValue(value, cfg.widthInches);
+  } else if (key.equals("height_inches")) {
+    cfg.heightInches = parseFloatValue(value, cfg.heightInches);
+  } else if (key.equals("dpi")) {
+    cfg.dpi = parseIntValue(value, cfg.dpi);
+  }
+  // `shape: square` is implicit (square defaults already loaded);
+  // `shape: rectangular` requires explicit width/height per sketch.
+}
+
+int leadingSpaces(String s) {
+  int count = 0;
+  while (count < s.length() && s.charAt(count) == ' ') count++;
+  return count;
+}
+
+int parseIntValue(String s, int fallback) {
+  try {
+    return Integer.parseInt(s);
+  } catch (Exception e) {
+    return fallback;
+  }
+}
+
+float parseFloatValue(String s, float fallback) {
+  try {
+    return Float.parseFloat(s);
+  } catch (Exception e) {
+    return fallback;
+  }
+}
+
+ImageConfig fallbackImageConfig() {
+  ImageConfig cfg = new ImageConfig();
+  cfg.widthInches = 16.0;
+  cfg.heightInches = 16.0;
+  cfg.dpi = 300;
+  cfg.widthPx = 4800;
+  cfg.heightPx = 4800;
+  return cfg;
 }

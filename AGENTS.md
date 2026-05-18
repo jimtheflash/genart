@@ -31,6 +31,7 @@ This repository is a generative art playground. The main goal is to make digital
 - Preserve randomness as a creative tool, but use seeds when reproducibility would help compare outputs.
 - Prefer parameter blocks near the top of sketches so the interesting knobs are easy to find.
 - Save generated images into `outputs/<sketch-name>/` when practical.
+- Static-image sketches should read their canvas dimensions from `image_config.yml` at the repo root and expose `--width-inches` / `--height-inches` / `--dpi` (or their YAML equivalents) for overrides, so sizing stays consistent across languages.
 - Avoid overwriting existing output files unless the user explicitly asks for that.
 - Use language-native package managers and document any nonstandard dependency in the sketch folder or language README.
 - Do not introduce heavy frameworks unless they clearly help with rendering, performance, or creative exploration.

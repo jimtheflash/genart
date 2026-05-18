@@ -17,47 +17,58 @@ source "$HOME/.cargo/env"
 
 ## Run
 
-From this folder:
+From this folder. Dimensions default to `image_config.yml` at the repo root
+(16 in × 16 in @ 300 dpi → 4800 × 4800 px). Noise rendering is cheap, so the
+default size completes in seconds; visual detail scales with grid density, so
+expect tighter, busier output than the original 1000² runs.
 
 ```bash
-# Reproduces make_gas_giants — simplex noise, 7 octaves, purple ramp.
+# Default print size from image_config.yml (4800 x 4800 px).
 cargo run --release -- \
   --preset gas-giants \
-  --size 1000 \
-  --out ../../../outputs/fbm_fields/gas_giants_small.png
+  --out ../../../outputs/fbm_fields/gas_giants_default.png
 
 # Reproduces make_river_section — perlin noise, 10 octaves, green-blue ramp.
 cargo run --release -- \
   --preset river-section \
-  --size 1000 \
-  --out ../../../outputs/fbm_fields/river_section_small.png
+  --out ../../../outputs/fbm_fields/river_section_default.png
 
-# Print-quality: 12000 x 12000 ~= 40 inches at 300 dpi. Takes seconds.
+# 40 inches at 300 dpi for very large prints.
 cargo run --release -- \
   --preset gas-giants \
-  --size 12000 \
+  --width-inches 40 --height-inches 40 --dpi 300 \
   --out ../../../outputs/fbm_fields/gas_giants_print.png
+
+# Quick iteration: small canvas via CLI override.
+cargo run --release -- \
+  --preset gas-giants \
+  --width-inches 4 --height-inches 4 --dpi 250 \
+  --out ../../../outputs/fbm_fields/gas_giants_small.png
 
 # Full custom: any noise type + octaves + gradient + seed.
 cargo run --release -- \
   --noise perlin --octaves 12 --persistence 0.55 \
-  --gradient spectral-preset --seed 42 --size 2400 \
+  --gradient spectral-preset --seed 42 \
+  --width-inches 8 --height-inches 8 --dpi 300 \
   --out ../../../outputs/fbm_fields/custom.png
 ```
 
 ## Flags
 
-| flag            | default  | notes                                                    |
-| --------------- | -------- | -------------------------------------------------------- |
-| `--preset`      | (none)   | `gas-giants` or `river-section` (mirrors the R functions)|
-| `--size`        | 1000     | side length in pixels (image is square)                  |
-| `--octaves`     | 7        | fbm octave count                                         |
-| `--persistence` | 0.5      | amplitude falloff per octave                             |
-| `--lacunarity`  | 2.0      | frequency multiplier per octave                          |
-| `--noise`       | simplex  | `simplex` or `perlin`                                    |
-| `--gradient`    | purples  | `purples` `blues` `greens` `oranges` `grays` `spectral` `green-blue` `spectral-preset` |
-| `--seed`        | 0        | reproducible — same seed → same output                   |
-| `--out`         | required | path to write PNG or JPEG                                |
+| flag             | default                | notes                                                    |
+| ---------------- | ---------------------- | -------------------------------------------------------- |
+| `--preset`       | (none)                 | `gas-giants` or `river-section` (mirrors the R functions)|
+| `--width-inches` | from `image_config.yml`| canvas width in inches                                   |
+| `--height-inches`| from `image_config.yml`| canvas height in inches (must equal width for now)       |
+| `--dpi`          | from `image_config.yml`| print resolution (pixels per inch)                       |
+| `--image-config` | `../../../image_config.yml` | YAML path with defaults                             |
+| `--octaves`      | 7                      | fbm octave count                                         |
+| `--persistence`  | 0.5                    | amplitude falloff per octave                             |
+| `--lacunarity`   | 2.0                    | frequency multiplier per octave                          |
+| `--noise`        | simplex                | `simplex` or `perlin`                                    |
+| `--gradient`     | purples                | `purples` `blues` `greens` `oranges` `grays` `spectral` `green-blue` `spectral-preset` |
+| `--seed`         | 0                      | reproducible — same seed → same output                   |
+| `--out`          | required               | path to write PNG or JPEG                                |
 
 ## Algorithm
 

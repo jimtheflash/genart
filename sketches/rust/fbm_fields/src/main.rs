@@ -9,11 +9,18 @@
 //      coordinates — i.e. domain warping. This is the move that turns
 //      smooth noise into Jupiter-band swirls and river-delta veining.
 //
+// Dimensions default to image_config.yml at the repo root (16 in x 16 in at
+// 300 dpi = 4800 x 4800 px). Override with --width-inches / --height-inches
+// / --dpi, or point --image-config at a different YAML.
+//
 // Usage:
-//   cargo run --release -- --preset gas-giants --size 1000 --out path.png
-//   cargo run --release -- --preset river-section --size 1000 --out path.png
-//   cargo run --release -- --noise perlin --octaves 12 --size 4096 \
-//       --gradient ocean --seed 42 --out path.png
+//   cargo run --release -- --preset gas-giants --out path.png
+//   cargo run --release -- --preset river-section --out path.png
+//   cargo run --release -- --noise perlin --octaves 12 \
+//       --width-inches 12 --height-inches 12 --dpi 300 \
+//       --gradient spectral --seed 42 --out path.png
+
+mod image_config;
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -59,9 +66,21 @@ struct Cli {
     #[arg(long, value_enum)]
     preset: Option<Preset>,
 
-    /// Image side length in pixels (rendered as size x size).
-    #[arg(long, default_value_t = 1000)]
-    size: u32,
+    /// Override the canvas width (inches). Falls back to image_config.yml.
+    #[arg(long)]
+    width_inches: Option<f64>,
+
+    /// Override the canvas height (inches). Falls back to image_config.yml.
+    #[arg(long)]
+    height_inches: Option<f64>,
+
+    /// Override the print resolution (dots per inch). Falls back to image_config.yml.
+    #[arg(long)]
+    dpi: Option<u32>,
+
+    /// Path to the YAML defaults file.
+    #[arg(long, default_value = "../../../image_config.yml")]
+    image_config: PathBuf,
 
     /// Number of fbm octaves.
     #[arg(long, default_value_t = 7)]
@@ -96,12 +115,31 @@ fn main() {
     let mut cli = Cli::parse();
     apply_preset(&mut cli);
 
+    let cfg = image_config::load(&cli.image_config, "fbm_fields");
+    let resolved = image_config::Resolved {
+        width_inches: cli.width_inches.unwrap_or(cfg.width_inches),
+        height_inches: cli.height_inches.unwrap_or(cfg.height_inches),
+        dpi: cli.dpi.unwrap_or(cfg.dpi),
+    };
+    let width_px = resolved.width_px();
+    let height_px = resolved.height_px();
+
+    if width_px != height_px {
+        eprintln!(
+            "error: fbm_fields currently supports square canvases only; got {}x{} px ({} in x {} in @ {} dpi). \
+             Set --width-inches and --height-inches to the same value, or edit image_config.yml.",
+            width_px, height_px, resolved.width_inches, resolved.height_inches, resolved.dpi,
+        );
+        std::process::exit(2);
+    }
+    let size = width_px;
+
     let started = Instant::now();
-    let pixels = render(&cli);
+    let pixels = render(&cli, size);
     let render_ms = started.elapsed().as_millis();
 
     let buffer: ImageBuffer<Rgb<u8>, Vec<u8>> =
-        ImageBuffer::from_raw(cli.size, cli.size, pixels).expect("buffer dimensions mismatch");
+        ImageBuffer::from_raw(size, size, pixels).expect("buffer dimensions mismatch");
 
     if let Some(parent) = cli.out.parent() {
         if !parent.as_os_str().is_empty() {
@@ -112,10 +150,13 @@ fn main() {
     buffer.save(&cli.out).expect("could not save image");
 
     println!(
-        "wrote {} ({}x{}, noise={:?}, octaves={}, gradient={:?}, seed={}) in {} ms",
+        "wrote {} ({}x{} px, {} in x {} in @ {} dpi, noise={:?}, octaves={}, gradient={:?}, seed={}) in {} ms",
         cli.out.display(),
-        cli.size,
-        cli.size,
+        size,
+        size,
+        resolved.width_inches,
+        resolved.height_inches,
+        resolved.dpi,
         cli.noise,
         cli.octaves,
         cli.gradient,
@@ -140,8 +181,8 @@ fn apply_preset(cli: &mut Cli) {
     }
 }
 
-fn render(cli: &Cli) -> Vec<u8> {
-    let size = cli.size as usize;
+fn render(cli: &Cli, side_px: u32) -> Vec<u8> {
+    let size = side_px as usize;
     let gradient = build_gradient(cli.gradient);
 
     let raw = match cli.noise {
