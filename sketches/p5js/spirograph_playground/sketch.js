@@ -810,7 +810,7 @@ function drawTrailRange(start, end, target, size, palette, alpha, maxVertices = 
   if (end <= start) return;
   if (alpha <= 0.2) return;
   const darkBackground = isDarkPalette(palette);
-  const coreWeight = Math.max(0.9, size / 820);
+  const coreWeight = Math.max(1.8, size / 410);
 
   target.push();
   target.noFill();
@@ -1205,7 +1205,7 @@ function emitSparkles(palette) {
   const mapped = mapPathIndexToCanvas(currentStep, canvasSize);
   const previousMapped = mapPathIndexToCanvas(currentStep - playDirection * playbackStride(), canvasSize);
   const angle = Math.atan2(mapped.y - previousMapped.y, mapped.x - previousMapped.x);
-  const count = isDarkPalette(palette) ? 5 : 3;
+  const count = isDarkPalette(palette) ? 2 : 2;
   const color = sparkColorForPalette(palette);
 
   for (let index = 0; index < count; index += 1) {
@@ -1220,7 +1220,7 @@ function emitSparkles(palette) {
       vy: Math.sin(direction) * speed,
       life,
       maxLife: life,
-      size: random(canvasSize * 0.0026, canvasSize * 0.0072),
+      size: random(canvasSize * 0.0013, canvasSize * 0.0036),
       color,
     });
   }
