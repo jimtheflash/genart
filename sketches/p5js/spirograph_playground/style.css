@@ -292,8 +292,8 @@ input[type="range"] {
   place-items: center;
 }
 
-.canvas-stage:fullscreen canvas,
-.canvas-stage.is-app-fullscreen canvas {
+.canvas-stage:fullscreen #canvasMount canvas,
+.canvas-stage.is-app-fullscreen #canvasMount canvas {
   width: min(100vw, 100vh) !important;
   height: min(100vw, 100vh) !important;
   border: 0;
