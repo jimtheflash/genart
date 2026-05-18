@@ -51,6 +51,11 @@ textarea {
   padding: 22px;
 }
 
+.mobile-toolbar,
+.controls-toggle {
+  display: none;
+}
+
 .topbar {
   display: flex;
   align-items: baseline;
@@ -306,8 +311,10 @@ body.has-app-fullscreen {
   }
 
   .canvas-pane {
+    grid-template-rows: auto 1fr auto auto;
     min-height: auto;
     padding: 16px;
+    gap: 12px;
   }
 
   .topbar {
@@ -321,10 +328,45 @@ body.has-app-fullscreen {
     text-align: left;
   }
 
+  .mobile-toolbar {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .mobile-toolbar button {
+    min-height: 44px;
+    border: 1px solid var(--rule);
+    background: var(--button);
+  }
+
+  .mobile-toolbar #mobilePlayPauseBtn {
+    border-color: transparent;
+    background: var(--accent);
+    color: #ffffff;
+  }
+
+  .controls-toggle {
+    display: block;
+    width: 100%;
+    min-height: 40px;
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    background: var(--button);
+    color: var(--ink);
+    font-weight: 700;
+    cursor: pointer;
+  }
+
   .controls-pane {
+    display: none;
     min-height: auto;
     border-left: 0;
     border-top: 1px solid var(--rule);
+  }
+
+  .controls-pane.is-open {
+    display: block;
   }
 
   .control-section {

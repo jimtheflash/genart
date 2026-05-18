@@ -18,9 +18,25 @@
         <div class="canvas-stage">
           <div id="canvasMount" aria-label="Animated spirograph drawing"></div>
         </div>
+
+        <div class="mobile-toolbar" aria-label="Quick controls">
+          <button id="mobileRandomBtn" type="button">New</button>
+          <button id="mobilePlayPauseBtn" type="button">Pause</button>
+          <button id="mobileFullscreenBtn" type="button">Fullscreen</button>
+        </div>
+
+        <button
+          id="controlsToggleBtn"
+          class="controls-toggle"
+          type="button"
+          aria-expanded="false"
+          aria-controls="controlsPane"
+        >
+          Show controls
+        </button>
       </section>
 
-      <aside class="controls-pane" aria-label="Controls">
+      <aside id="controlsPane" class="controls-pane" aria-label="Controls">
         <section class="control-section">
           <div class="field">
             <label for="modeSelect">Mode</label>

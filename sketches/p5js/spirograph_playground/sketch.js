@@ -2,7 +2,7 @@
 // Run from the repo root with: python3 -m http.server 8000
 // Then open: http://localhost:8000/sketches/p5js/spirograph_playground/
 
-const PALETTE_URL = "../../../palettes.yml";
+const PALETTE_URL = "./palettes.yml";
 const FALLBACK_PALETTES = [
   { name: "fallback_black_on_white", background: [255, 255, 255], points: [0, 0, 0], alpha: 190 },
 ];
@@ -138,6 +138,11 @@ function cacheUi() {
     statusLine: document.getElementById("statusLine"),
     paletteBrowser: document.getElementById("paletteBrowser"),
     canvasStage: document.querySelector(".canvas-stage"),
+    controlsPane: document.getElementById("controlsPane"),
+    controlsToggleBtn: document.getElementById("controlsToggleBtn"),
+    mobileRandomBtn: document.getElementById("mobileRandomBtn"),
+    mobilePlayPauseBtn: document.getElementById("mobilePlayPauseBtn"),
+    mobileFullscreenBtn: document.getElementById("mobileFullscreenBtn"),
   };
 }
 
@@ -156,6 +161,10 @@ function installUiEvents() {
   ui.playPauseBtn.addEventListener("click", togglePlayback);
   ui.jumpEndBtn.addEventListener("click", jumpToEnd);
   ui.fullscreenBtn.addEventListener("click", enterFullscreen);
+  ui.mobileRandomBtn.addEventListener("click", () => randomizeArtwork());
+  ui.mobilePlayPauseBtn.addEventListener("click", togglePlayback);
+  ui.mobileFullscreenBtn.addEventListener("click", enterFullscreen);
+  ui.controlsToggleBtn.addEventListener("click", toggleControlsDrawer);
   [ui.fixedPieceSelect, ui.wheelSelect, ui.penHoleSelect].forEach((select) => {
     select.addEventListener("change", handleShapeControlChange);
   });
@@ -1020,7 +1029,15 @@ function syncProgressUi() {
 }
 
 function syncPlaybackUi() {
-  ui.playPauseBtn.textContent = isPlaying ? "Pause" : "Play";
+  const label = isPlaying ? "Pause" : "Play";
+  ui.playPauseBtn.textContent = label;
+  if (ui.mobilePlayPauseBtn) ui.mobilePlayPauseBtn.textContent = label;
+}
+
+function toggleControlsDrawer() {
+  const isOpen = ui.controlsPane.classList.toggle("is-open");
+  ui.controlsToggleBtn.textContent = isOpen ? "Hide controls" : "Show controls";
+  ui.controlsToggleBtn.setAttribute("aria-expanded", String(isOpen));
 }
 
 function syncPaletteBrowser() {
@@ -1035,7 +1052,9 @@ function syncPaletteBrowser() {
 function syncFullscreenUi() {
   if (!ui.fullscreenBtn) return;
   const isFullscreen = Boolean(document.fullscreenElement) || ui.canvasStage?.classList.contains("is-app-fullscreen");
-  ui.fullscreenBtn.textContent = isFullscreen ? "Exit Fullscreen" : "Fullscreen";
+  const label = isFullscreen ? "Exit Fullscreen" : "Fullscreen";
+  ui.fullscreenBtn.textContent = label;
+  if (ui.mobileFullscreenBtn) ui.mobileFullscreenBtn.textContent = label;
 }
 
 function syncStatus(message) {
