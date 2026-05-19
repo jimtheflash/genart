@@ -51,39 +51,17 @@
           <div id="shapeControls" class="shape-controls" aria-label="Classic spirograph pieces">
             <div class="shape-group">
               <div class="shape-group-label">Outer piece</div>
-              <div class="icon-row" id="fixedVariantRow" role="radiogroup" aria-label="Outer piece variant">
-                <button type="button" class="icon-btn" data-variant="hypotrochoid" aria-label="Ring (hypotrochoid)" title="Ring">
-                  <svg viewBox="0 0 40 40" aria-hidden="true">
-                    <circle cx="20" cy="20" r="16" fill="none" stroke="currentColor" stroke-width="2.5" />
-                    <circle cx="20" cy="20" r="9" fill="none" stroke="currentColor" stroke-width="1" stroke-dasharray="2 2" opacity="0.5" />
-                  </svg>
-                  <span>Ring</span>
-                </button>
-                <button type="button" class="icon-btn" data-variant="epitrochoid" aria-label="Outer gear (epitrochoid)" title="Outer gear">
-                  <svg viewBox="0 0 40 40" aria-hidden="true">
-                    <g fill="currentColor">
-                      <circle cx="20" cy="20" r="11" fill="none" stroke="currentColor" stroke-width="2" />
-                      <rect x="19" y="2" width="2" height="4" />
-                      <rect x="19" y="34" width="2" height="4" />
-                      <rect x="2" y="19" width="4" height="2" />
-                      <rect x="34" y="19" width="4" height="2" />
-                      <rect x="6.5" y="6.5" width="3" height="2" transform="rotate(45 8 7.5)" />
-                      <rect x="30.5" y="6.5" width="3" height="2" transform="rotate(-45 32 7.5)" />
-                      <rect x="6.5" y="31.5" width="3" height="2" transform="rotate(-45 8 32.5)" />
-                      <rect x="30.5" y="31.5" width="3" height="2" transform="rotate(45 32 32.5)" />
-                    </g>
-                  </svg>
-                  <span>Gear</span>
-                </button>
-              </div>
-              <div class="size-row" id="fixedSizeRow" role="radiogroup" aria-label="Outer piece size"></div>
+              <div class="icon-row icon-row-quad" id="outerShapeRow" role="radiogroup" aria-label="Outer piece shape"></div>
+              <div class="icon-row" id="outerVariantRow" role="radiogroup" aria-label="Outer piece variant"></div>
+              <div class="size-row" id="outerSizeRow" role="radiogroup" aria-label="Outer piece size"></div>
             </div>
 
             <div class="shape-group">
               <div class="shape-group-label">Inner wheel</div>
+              <div class="icon-row" id="innerShapeRow" role="radiogroup" aria-label="Inner wheel shape"></div>
               <div class="wheel-icon-wrap">
                 <svg id="wheelIcon" viewBox="-50 -50 100 100" aria-label="Wheel with pen-hole positions">
-                  <circle cx="0" cy="0" r="32" fill="none" stroke="currentColor" stroke-width="2.5" />
+                  <ellipse id="wheelOutline" cx="0" cy="0" rx="32" ry="32" fill="none" stroke="currentColor" stroke-width="2.5" />
                   <g id="penHoleDots"></g>
                 </svg>
               </div>
@@ -124,12 +102,12 @@
 
           <div class="color-pickers">
             <div class="field">
-              <label for="bgColorInput">Background</label>
-              <input id="bgColorInput" type="color" value="#ffffff" />
+              <label id="bgSwatchLabel">Background</label>
+              <div id="bgSwatchGrid" class="swatch-grid" role="radiogroup" aria-labelledby="bgSwatchLabel"></div>
             </div>
             <div class="field">
-              <label for="fgColorInput">Line color</label>
-              <input id="fgColorInput" type="color" value="#000000" />
+              <label id="fgSwatchLabel">Line color</label>
+              <div id="fgSwatchGrid" class="swatch-grid" role="radiogroup" aria-labelledby="fgSwatchLabel"></div>
             </div>
           </div>
 

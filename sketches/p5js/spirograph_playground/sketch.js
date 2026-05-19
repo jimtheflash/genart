@@ -20,19 +20,44 @@ const FIT_SAMPLE_POINTS = 120000;
 const MIN_DRAW_SPEED = 0.01;
 const MAX_DRAW_SPEED = 1;
 const DISPLAY_FRAME_RATE = 60;
-const RECIPE_VERSION = 3;
+const RECIPE_VERSION = 4;
 const PERMANENT_TRAIL_OPACITY = 0.1;
 const RECENT_TRAIL_OPACITY = 0.9;
 const FRESH_TRAIL_REPEATS = 1;
 const RECENT_FADE_REPEATS = 6;
 const RECENT_FADE_CHUNKS = 18;
 const RECENT_CHUNK_VERTEX_LIMIT = 9000;
-const FIXED_PIECES = [
-  { id: "ring96", label: "96", radius: 96, variant: "hypotrochoid" },
-  { id: "ring120", label: "120", radius: 120, variant: "hypotrochoid" },
-  { id: "outer72", label: "72", radius: 72, variant: "epitrochoid" },
-  { id: "outer96", label: "96", radius: 96, variant: "epitrochoid" },
+
+// Outer (stationary) shapes — each defines a radius-vs-angle function r(t),
+// giving the distance from origin to the perimeter at angle t. This drives
+// the "approximate rolling" generalization of the trochoid formula.
+const OUTER_SHAPES = [
+  { id: "circle", label: "Circle" },
+  { id: "square", label: "Square" },
+  { id: "hexagon", label: "Hexagon" },
+  { id: "star", label: "Star" },
 ];
+const STAR_POINTS = 5;
+const STAR_AMPLITUDE = 0.28;
+
+const OUTER_SIZES = [
+  { id: "size96", label: "96", radius: 96 },
+  { id: "size120", label: "120", radius: 120 },
+];
+const OUTER_VARIANTS = [
+  { id: "hypotrochoid", label: "Inside" },
+  { id: "epitrochoid", label: "Outside" },
+];
+
+// Inner (rolling) shapes — circle plus two ellipse aspect ratios. The aspect
+// modulates the pen's offset in x vs. y, so an "Oval H" inner produces a
+// horizontally-stretched epi/hypocycloid.
+const INNER_SHAPES = [
+  { id: "circle", label: "Circle", aspectX: 1, aspectY: 1 },
+  { id: "ellipseWide", label: "Oval H", aspectX: 1.4, aspectY: 0.7 },
+  { id: "ellipseTall", label: "Oval V", aspectX: 0.7, aspectY: 1.4 },
+];
+
 const ROLLING_WHEELS = [
   { id: "wheel24", label: "24", radius: 24 },
   { id: "wheel32", label: "32", radius: 32 },
@@ -46,7 +71,11 @@ const PEN_HOLES = [
   { id: "nearEdge", label: "Near edge", ratio: 0.88 },
   { id: "outerReach", label: "Outer reach", ratio: 1.16 },
 ];
-const FIXED_PIECE_BY_ID = Object.fromEntries(FIXED_PIECES.map((piece) => [piece.id, piece]));
+
+const OUTER_SHAPE_BY_ID = Object.fromEntries(OUTER_SHAPES.map((shape) => [shape.id, shape]));
+const OUTER_SIZE_BY_ID = Object.fromEntries(OUTER_SIZES.map((size) => [size.id, size]));
+const OUTER_VARIANT_BY_ID = Object.fromEntries(OUTER_VARIANTS.map((variant) => [variant.id, variant]));
+const INNER_SHAPE_BY_ID = Object.fromEntries(INNER_SHAPES.map((shape) => [shape.id, shape]));
 const ROLLING_WHEEL_BY_ID = Object.fromEntries(ROLLING_WHEELS.map((wheel) => [wheel.id, wheel]));
 const PEN_HOLE_BY_ID = Object.fromEntries(PEN_HOLES.map((hole) => [hole.id, hole]));
 
@@ -79,8 +108,72 @@ function setup() {
 
   loadPalettes().then((loadedPalettes) => {
     palettes = loadedPalettes.length > 0 ? loadedPalettes : FALLBACK_PALETTES.slice();
+    buildSwatchGrids();
     randomizeArtwork();
   });
+}
+
+function uniquePaletteColors(paletteList) {
+  const seen = new Map();
+  paletteList.forEach((palette) => {
+    [palette.background, palette.points].forEach((rgb) => {
+      if (!Array.isArray(rgb) || rgb.length !== 3) return;
+      const key = `${rgb[0]},${rgb[1]},${rgb[2]}`;
+      if (!seen.has(key)) {
+        seen.set(key, rgb.slice());
+      }
+    });
+  });
+  // Sort by luminance so the swatch row reads light-to-dark consistently.
+  return Array.from(seen.values()).sort((a, b) => luminance(b) - luminance(a));
+}
+
+function buildSwatchGrids() {
+  if (!ui.bgSwatchGrid || !ui.fgSwatchGrid) return;
+  const colors = uniquePaletteColors(palettes);
+  [ui.bgSwatchGrid, ui.fgSwatchGrid].forEach((grid) => {
+    grid.innerHTML = "";
+    colors.forEach((rgb) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "swatch-btn";
+      btn.dataset.rgb = `${rgb[0]},${rgb[1]},${rgb[2]}`;
+      btn.style.backgroundColor = `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+      btn.setAttribute("aria-label", `Color rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`);
+      btn.setAttribute("role", "radio");
+      btn.setAttribute("aria-checked", "false");
+      grid.appendChild(btn);
+    });
+  });
+  syncSwatchSelection();
+}
+
+function parseSwatchRgb(value) {
+  if (typeof value !== "string") return null;
+  const parts = value.split(",").map((piece) => Number(piece.trim()));
+  if (parts.length !== 3 || !parts.every(Number.isFinite)) return null;
+  return parts.map((piece) => clamp(Math.round(piece), 0, 255));
+}
+
+function syncSwatchSelection() {
+  if (!ui.bgSwatchGrid || !ui.fgSwatchGrid) return;
+  const bgKey = recipe ? rgbKey(recipe.colors.background) : null;
+  const fgKey = recipe ? rgbKey(recipe.colors.points) : null;
+  markActiveSwatch(ui.bgSwatchGrid, bgKey);
+  markActiveSwatch(ui.fgSwatchGrid, fgKey);
+}
+
+function markActiveSwatch(grid, activeKey) {
+  grid.querySelectorAll("[data-rgb]").forEach((btn) => {
+    const matches = btn.dataset.rgb === activeKey;
+    btn.classList.toggle("is-active", matches);
+    btn.setAttribute("aria-checked", String(matches));
+  });
+}
+
+function rgbKey(rgb) {
+  if (!Array.isArray(rgb) || rgb.length !== 3) return null;
+  return `${rgb[0]},${rgb[1]},${rgb[2]}`;
 }
 
 function draw() {
@@ -110,10 +203,13 @@ function cacheUi() {
   ui = {
     modeSelect: document.getElementById("modeSelect"),
     shapeControls: document.getElementById("shapeControls"),
-    fixedVariantRow: document.getElementById("fixedVariantRow"),
-    fixedSizeRow: document.getElementById("fixedSizeRow"),
+    outerShapeRow: document.getElementById("outerShapeRow"),
+    outerVariantRow: document.getElementById("outerVariantRow"),
+    outerSizeRow: document.getElementById("outerSizeRow"),
+    innerShapeRow: document.getElementById("innerShapeRow"),
     wheelSizeRow: document.getElementById("wheelSizeRow"),
     wheelIcon: document.getElementById("wheelIcon"),
+    wheelOutline: document.getElementById("wheelOutline"),
     penHoleDots: document.getElementById("penHoleDots"),
     epicycleControls: document.getElementById("epicycleControls"),
     epiSymmetryRange: document.getElementById("epiSymmetryRange"),
@@ -124,8 +220,8 @@ function cacheUi() {
     epiWobbleFreqValue: document.getElementById("epiWobbleFreqValue"),
     epiRotationDriftRange: document.getElementById("epiRotationDriftRange"),
     epiRotationDriftValue: document.getElementById("epiRotationDriftValue"),
-    bgColorInput: document.getElementById("bgColorInput"),
-    fgColorInput: document.getElementById("fgColorInput"),
+    bgSwatchGrid: document.getElementById("bgSwatchGrid"),
+    fgSwatchGrid: document.getElementById("fgSwatchGrid"),
     randomizeBtn: document.getElementById("randomizeBtn"),
     restartBtn: document.getElementById("restartBtn"),
     playPauseBtn: document.getElementById("playPauseBtn"),
@@ -151,19 +247,54 @@ function cacheUi() {
 }
 
 function buildShapeControls() {
-  ui.fixedSizeRow.innerHTML = "";
+  ui.outerShapeRow.innerHTML = "";
+  ui.outerVariantRow.innerHTML = "";
+  ui.outerSizeRow.innerHTML = "";
+  ui.innerShapeRow.innerHTML = "";
   ui.wheelSizeRow.innerHTML = "";
   ui.penHoleDots.innerHTML = "";
 
-  FIXED_PIECES.forEach((piece) => {
+  OUTER_SHAPES.forEach((shape) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "icon-btn";
+    button.dataset.outerShapeId = shape.id;
+    button.setAttribute("aria-label", `${shape.label} outer piece`);
+    button.title = shape.label;
+    button.innerHTML = `${outerShapeIconSvg(shape.id)}<span>${shape.label}</span>`;
+    ui.outerShapeRow.appendChild(button);
+  });
+
+  OUTER_VARIANTS.forEach((variant) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "icon-btn";
+    button.dataset.variantId = variant.id;
+    button.setAttribute("aria-label", `${variant.label} (${variant.id})`);
+    button.title = variant.label;
+    button.innerHTML = `${outerVariantIconSvg(variant.id)}<span>${variant.label}</span>`;
+    ui.outerVariantRow.appendChild(button);
+  });
+
+  OUTER_SIZES.forEach((size) => {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "size-btn";
-    button.dataset.fixedId = piece.id;
-    button.dataset.variant = piece.variant;
-    button.textContent = piece.label;
-    button.setAttribute("aria-label", `${piece.variant === "hypotrochoid" ? "Ring" : "Outer gear"} radius ${piece.radius}`);
-    ui.fixedSizeRow.appendChild(button);
+    button.dataset.outerSizeId = size.id;
+    button.textContent = size.label;
+    button.setAttribute("aria-label", `Outer radius ${size.radius}`);
+    ui.outerSizeRow.appendChild(button);
+  });
+
+  INNER_SHAPES.forEach((shape) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "icon-btn";
+    button.dataset.innerShapeId = shape.id;
+    button.setAttribute("aria-label", `${shape.label} inner wheel`);
+    button.title = shape.label;
+    button.innerHTML = `${innerShapeIconSvg(shape.id)}<span>${shape.label}</span>`;
+    ui.innerShapeRow.appendChild(button);
   });
 
   ROLLING_WHEELS.forEach((wheel) => {
@@ -193,6 +324,39 @@ function buildShapeControls() {
   });
 }
 
+function outerShapeIconSvg(shapeId) {
+  switch (shapeId) {
+    case "square":
+      return '<svg viewBox="0 0 40 40" aria-hidden="true"><rect x="6" y="6" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2.5" /></svg>';
+    case "hexagon":
+      return '<svg viewBox="0 0 40 40" aria-hidden="true"><polygon points="20,5 33,12.5 33,27.5 20,35 7,27.5 7,12.5" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round" /></svg>';
+    case "star":
+      return '<svg viewBox="0 0 40 40" aria-hidden="true"><polygon points="20,4 24,16 36,16 26,23 30,35 20,28 10,35 14,23 4,16 16,16" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" /></svg>';
+    case "circle":
+    default:
+      return '<svg viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="15" fill="none" stroke="currentColor" stroke-width="2.5" /></svg>';
+  }
+}
+
+function outerVariantIconSvg(variantId) {
+  if (variantId === "epitrochoid") {
+    return '<svg viewBox="0 0 40 40" aria-hidden="true"><circle cx="16" cy="20" r="9" fill="none" stroke="currentColor" stroke-width="2" /><circle cx="29" cy="20" r="4" fill="none" stroke="currentColor" stroke-width="1.5" /></svg>';
+  }
+  return '<svg viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="14" fill="none" stroke="currentColor" stroke-width="2" /><circle cx="20" cy="20" r="6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2 2" /></svg>';
+}
+
+function innerShapeIconSvg(shapeId) {
+  switch (shapeId) {
+    case "ellipseWide":
+      return '<svg viewBox="0 0 40 40" aria-hidden="true"><ellipse cx="20" cy="20" rx="15" ry="8" fill="none" stroke="currentColor" stroke-width="2.5" /></svg>';
+    case "ellipseTall":
+      return '<svg viewBox="0 0 40 40" aria-hidden="true"><ellipse cx="20" cy="20" rx="8" ry="15" fill="none" stroke="currentColor" stroke-width="2.5" /></svg>';
+    case "circle":
+    default:
+      return '<svg viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="13" fill="none" stroke="currentColor" stroke-width="2.5" /></svg>';
+  }
+}
+
 function installUiEvents() {
   ui.modeSelect.addEventListener("change", () => {
     randomizeArtwork({ mode: ui.modeSelect.value });
@@ -214,13 +378,25 @@ function installUiEvents() {
 
   ui.canvasStage.addEventListener("click", handleCanvasStageTap);
 
-  ui.fixedVariantRow.querySelectorAll("[data-variant]").forEach((btn) => {
-    btn.addEventListener("click", () => applyFixedVariant(btn.dataset.variant));
-  });
-  ui.fixedSizeRow.addEventListener("click", (event) => {
-    const target = event.target.closest("[data-fixed-id]");
+  ui.outerShapeRow.addEventListener("click", (event) => {
+    const target = event.target.closest("[data-outer-shape-id]");
     if (!target) return;
-    applyShapeChange({ fixedPieceId: target.dataset.fixedId });
+    applyShapeChange({ outerShapeId: target.dataset.outerShapeId });
+  });
+  ui.outerVariantRow.addEventListener("click", (event) => {
+    const target = event.target.closest("[data-variant-id]");
+    if (!target) return;
+    applyShapeChange({ variantId: target.dataset.variantId });
+  });
+  ui.outerSizeRow.addEventListener("click", (event) => {
+    const target = event.target.closest("[data-outer-size-id]");
+    if (!target) return;
+    applyShapeChange({ outerSizeId: target.dataset.outerSizeId });
+  });
+  ui.innerShapeRow.addEventListener("click", (event) => {
+    const target = event.target.closest("[data-inner-shape-id]");
+    if (!target) return;
+    applyShapeChange({ innerShapeId: target.dataset.innerShapeId });
   });
   ui.wheelSizeRow.addEventListener("click", (event) => {
     const target = event.target.closest("[data-wheel-id]");
@@ -238,8 +414,16 @@ function installUiEvents() {
   ui.epiWobbleFreqRange.addEventListener("input", () => applyEpicycleChange("wobbleFrequency", Number(ui.epiWobbleFreqRange.value)));
   ui.epiRotationDriftRange.addEventListener("input", () => applyEpicycleChange("rotationDrift", Number(ui.epiRotationDriftRange.value) * Math.PI));
 
-  ui.bgColorInput.addEventListener("input", () => applyColorChange("background", ui.bgColorInput.value));
-  ui.fgColorInput.addEventListener("input", () => applyColorChange("points", ui.fgColorInput.value));
+  ui.bgSwatchGrid.addEventListener("click", (event) => {
+    const target = event.target.closest("[data-rgb]");
+    if (!target) return;
+    applyColorChangeRgb("background", parseSwatchRgb(target.dataset.rgb));
+  });
+  ui.fgSwatchGrid.addEventListener("click", (event) => {
+    const target = event.target.closest("[data-rgb]");
+    if (!target) return;
+    applyColorChangeRgb("points", parseSwatchRgb(target.dataset.rgb));
+  });
 
   ui.speedRange.addEventListener("input", () => {
     if (recipe) {
@@ -396,8 +580,7 @@ function applyRecipe(nextRecipe, options = {}) {
   ui.speedRange.value = formatSpeedValue(recipe.drawSpeed);
   ui.progressRange.max = String(recipe.totalSteps);
   ui.progressRange.value = String(currentStep);
-  ui.bgColorInput.value = rgbToHex(recipe.colors.background);
-  ui.fgColorInput.value = rgbToHex(recipe.colors.points);
+  syncSwatchSelection();
 
   syncArtworkBackground(recipe.colors);
   syncShapeControls();
@@ -479,15 +662,6 @@ function clampRgb(rgb) {
   return [0, 1, 2].map((i) => clamp(Math.round(Number(rgb[i]) || 0), 0, 255));
 }
 
-function applyFixedVariant(variant) {
-  if (!recipe || recipe.mode !== "classic") return;
-  const matching = FIXED_PIECES.filter((piece) => piece.variant === variant);
-  if (matching.length === 0) return;
-  const currentPiece = FIXED_PIECE_BY_ID[recipe.shape?.fixedPieceId];
-  const nextPiece = currentPiece && currentPiece.variant === variant ? currentPiece : matching[0];
-  applyShapeChange({ fixedPieceId: nextPiece.id });
-}
-
 function applyShapeChange(partial) {
   if (!recipe || recipe.mode !== "classic") return;
   const nextShape = { ...recipe.shape, ...partial };
@@ -514,11 +688,16 @@ function applyEpicycleChange(key, value) {
 }
 
 function applyColorChange(channel, hexValue) {
-  if (!recipe) return;
   const rgb = hexToRgb(hexValue);
   if (!rgb) return;
+  applyColorChangeRgb(channel, rgb);
+}
+
+function applyColorChangeRgb(channel, rgb) {
+  if (!recipe || !Array.isArray(rgb) || rgb.length !== 3) return;
   recipe.colors = normalizeColors({ ...recipe.colors, [channel]: rgb });
   syncArtworkBackground(recipe.colors);
+  syncSwatchSelection();
   renderTrailToStep(currentStep);
   syncRecipeBox();
 }
@@ -532,32 +711,32 @@ function syncShapeControls() {
 
   if (!classicActive || !recipe.shape) return;
 
-  const activeFixed = FIXED_PIECE_BY_ID[recipe.shape.fixedPieceId];
-  const activeVariant = activeFixed ? activeFixed.variant : "hypotrochoid";
-
-  ui.fixedVariantRow.querySelectorAll("[data-variant]").forEach((btn) => {
-    const matches = btn.dataset.variant === activeVariant;
-    btn.classList.toggle("is-active", matches);
-    btn.setAttribute("aria-pressed", String(matches));
-  });
-
-  ui.fixedSizeRow.querySelectorAll("[data-fixed-id]").forEach((btn) => {
-    const visible = btn.dataset.variant === activeVariant;
-    btn.style.display = visible ? "" : "none";
-    const matches = btn.dataset.fixedId === recipe.shape.fixedPieceId;
-    btn.classList.toggle("is-active", matches);
-    btn.setAttribute("aria-pressed", String(matches));
-  });
-
-  ui.wheelSizeRow.querySelectorAll("[data-wheel-id]").forEach((btn) => {
-    const matches = btn.dataset.wheelId === recipe.shape.wheelId;
-    btn.classList.toggle("is-active", matches);
-    btn.setAttribute("aria-pressed", String(matches));
-  });
+  markActiveButtons(ui.outerShapeRow, "outerShapeId", recipe.shape.outerShapeId);
+  markActiveButtons(ui.outerVariantRow, "variantId", recipe.shape.variantId);
+  markActiveButtons(ui.outerSizeRow, "outerSizeId", recipe.shape.outerSizeId);
+  markActiveButtons(ui.innerShapeRow, "innerShapeId", recipe.shape.innerShapeId);
+  markActiveButtons(ui.wheelSizeRow, "wheelId", recipe.shape.wheelId);
 
   ui.penHoleDots.querySelectorAll("[data-pen-hole-id]").forEach((dot) => {
     const matches = dot.dataset.penHoleId === recipe.shape.penHoleId;
     dot.classList.toggle("is-active", matches);
+  });
+
+  // Update wheel preview to reflect inner ellipse vs. circle.
+  const innerShape = INNER_SHAPE_BY_ID[recipe.shape.innerShapeId] || INNER_SHAPES[0];
+  if (ui.wheelOutline) {
+    ui.wheelOutline.setAttribute("rx", String(32 * innerShape.aspectX));
+    ui.wheelOutline.setAttribute("ry", String(32 * innerShape.aspectY));
+  }
+}
+
+function markActiveButtons(row, datasetKey, activeValue) {
+  if (!row) return;
+  const datasetAttr = `data-${datasetKey.replace(/([A-Z])/g, "-$1").toLowerCase()}`;
+  row.querySelectorAll(`[${datasetAttr}]`).forEach((btn) => {
+    const matches = btn.dataset[datasetKey] === activeValue;
+    btn.classList.toggle("is-active", matches);
+    btn.setAttribute("aria-pressed", String(matches));
   });
 }
 
@@ -582,27 +761,52 @@ function syncEpicycleControls() {
   ui.epiRotationDriftValue.textContent = driftPi.toFixed(1);
 }
 
+// Recipes from v3 used `shape.fixedPieceId` (e.g. "ring96", "outer72"). Map
+// these onto the new outer-shape / outer-size / variant axes so old saves
+// still load.
+const LEGACY_FIXED_PIECE_MAP = {
+  ring96: { outerSizeId: "size96", variantId: "hypotrochoid" },
+  ring120: { outerSizeId: "size120", variantId: "hypotrochoid" },
+  outer72: { outerSizeId: "size96", variantId: "epitrochoid" },
+  outer96: { outerSizeId: "size96", variantId: "epitrochoid" },
+};
+
 function normalizeClassicShape(sourceShape, params) {
   const inferred = shapeFromClassicParams(params);
-  const fixedPieceId = FIXED_PIECE_BY_ID[sourceShape?.fixedPieceId]
-    ? sourceShape.fixedPieceId
-    : inferred.fixedPieceId;
+  const legacy = sourceShape?.fixedPieceId ? LEGACY_FIXED_PIECE_MAP[sourceShape.fixedPieceId] : null;
+
+  const outerShapeId = OUTER_SHAPE_BY_ID[sourceShape?.outerShapeId]
+    ? sourceShape.outerShapeId
+    : inferred.outerShapeId;
+  const outerSizeId = OUTER_SIZE_BY_ID[sourceShape?.outerSizeId]
+    ? sourceShape.outerSizeId
+    : legacy?.outerSizeId || inferred.outerSizeId;
+  const variantId = OUTER_VARIANT_BY_ID[sourceShape?.variantId]
+    ? sourceShape.variantId
+    : legacy?.variantId || inferred.variantId;
+  const innerShapeId = INNER_SHAPE_BY_ID[sourceShape?.innerShapeId]
+    ? sourceShape.innerShapeId
+    : inferred.innerShapeId;
   const wheelId = ROLLING_WHEEL_BY_ID[sourceShape?.wheelId] ? sourceShape.wheelId : inferred.wheelId;
   const penHoleId = PEN_HOLE_BY_ID[sourceShape?.penHoleId] ? sourceShape.penHoleId : inferred.penHoleId;
 
-  return { fixedPieceId, wheelId, penHoleId };
+  return { outerShapeId, outerSizeId, variantId, innerShapeId, wheelId, penHoleId };
 }
 
 function shapeFromClassicParams(params = {}) {
-  const variant = params.variant === "epitrochoid" ? "epitrochoid" : "hypotrochoid";
-  const matchingPieces = FIXED_PIECES.filter((piece) => piece.variant === variant);
-  const fixedPiece = closestBy(matchingPieces, params.fixedRadius || matchingPieces[0].radius, "radius");
+  const variantId = params.variant === "epitrochoid" ? "epitrochoid" : "hypotrochoid";
+  const outerShapeId = OUTER_SHAPE_BY_ID[params.outerShapeId] ? params.outerShapeId : "circle";
+  const outerSize = closestBy(OUTER_SIZES, params.fixedRadius || OUTER_SIZES[0].radius, "radius");
+  const innerShapeId = INNER_SHAPE_BY_ID[params.innerShapeId] ? params.innerShapeId : "circle";
   const wheel = closestBy(ROLLING_WHEELS, params.rollingRadius || ROLLING_WHEELS[0].radius, "radius");
   const penRatio = wheel.radius > 0 ? (params.penDistance || wheel.radius * 0.62) / wheel.radius : 0.62;
   const penHole = closestBy(PEN_HOLES, penRatio, "ratio");
 
   return {
-    fixedPieceId: fixedPiece.id,
+    outerShapeId,
+    outerSizeId: outerSize.id,
+    variantId,
+    innerShapeId,
     wheelId: wheel.id,
     penHoleId: penHole.id,
   };
@@ -612,10 +816,23 @@ function normalizeClassicParams(params = {}) {
   const fixedRadius = Number(params.fixedRadius);
   const rollingRadius = Number(params.rollingRadius);
   const tMax = Number(params.tMax);
+  const outerShapeId = OUTER_SHAPE_BY_ID[params.outerShapeId] ? params.outerShapeId : "circle";
+  const innerShape = INNER_SHAPE_BY_ID[params.innerShapeId] || INNER_SHAPES[0];
+  const safeFixedRadius = Number.isFinite(fixedRadius) ? fixedRadius : 96;
+  const aspectX = Number.isFinite(Number(params.innerAspectX))
+    ? Number(params.innerAspectX)
+    : innerShape.aspectX;
+  const aspectY = Number.isFinite(Number(params.innerAspectY))
+    ? Number(params.innerAspectY)
+    : innerShape.aspectY;
+  const outerMeanRadius = Number.isFinite(Number(params.outerMeanRadius))
+    ? Number(params.outerMeanRadius)
+    : computeOuterMeanRadius(outerShapeId, safeFixedRadius);
+
   const safeParams = {
     ...params,
     variant: params.variant === "epitrochoid" ? "epitrochoid" : "hypotrochoid",
-    fixedRadius: Number.isFinite(fixedRadius) ? fixedRadius : 96,
+    fixedRadius: safeFixedRadius,
     rollingRadius: Number.isFinite(rollingRadius) ? rollingRadius : 40,
     penDistance: Number.isFinite(Number(params.penDistance)) ? Number(params.penDistance) : 24.8,
     phase: Number.isFinite(Number(params.phase)) ? Number(params.phase) : 0,
@@ -625,6 +842,11 @@ function normalizeClassicParams(params = {}) {
     wobbleFrequency: Number.isFinite(Number(params.wobbleFrequency)) ? Number(params.wobbleFrequency) : 1,
     wobblePhase: Number.isFinite(Number(params.wobblePhase)) ? Number(params.wobblePhase) : 0,
     tMax: Number.isFinite(tMax) ? tMax : TWO_PI_VALUE * 48,
+    outerShapeId,
+    innerShapeId: innerShape.id,
+    innerAspectX: aspectX,
+    innerAspectY: aspectY,
+    outerMeanRadius: roundForRecipe(outerMeanRadius),
   };
 
   if (!Number.isFinite(Number(safeParams.repeatCount)) || Number(safeParams.repeatCount) <= 0) {
@@ -672,12 +894,14 @@ function closestBy(items, value, key) {
 function makeClassicParams(seed, shapeSelection) {
   const rng = mulberry32(seed);
   const shape = resolveClassicShapeSelection(shapeSelection, rng);
-  const fixedPiece = FIXED_PIECE_BY_ID[shape.fixedPieceId];
+  const outerSize = OUTER_SIZE_BY_ID[shape.outerSizeId];
   const wheel = ROLLING_WHEEL_BY_ID[shape.wheelId];
   const penHole = PEN_HOLE_BY_ID[shape.penHoleId];
-  const variant = fixedPiece.variant;
-  const fixedRadius = fixedPiece.radius;
+  const innerShape = INNER_SHAPE_BY_ID[shape.innerShapeId];
+  const variant = shape.variantId === "epitrochoid" ? "epitrochoid" : "hypotrochoid";
+  const fixedRadius = outerSize.radius;
   const rollingRadius = wheel.radius;
+  const outerMeanRadius = computeOuterMeanRadius(shape.outerShapeId, fixedRadius);
 
   const common = gcd(fixedRadius, rollingRadius);
   const closeTurns = clamp(rollingRadius / common, 2, 12);
@@ -696,6 +920,11 @@ function makeClassicParams(seed, shapeSelection) {
     shape,
     params: {
       variant,
+      outerShapeId: shape.outerShapeId,
+      innerShapeId: innerShape.id,
+      innerAspectX: innerShape.aspectX,
+      innerAspectY: innerShape.aspectY,
+      outerMeanRadius: roundForRecipe(outerMeanRadius),
       fixedRadius,
       rollingRadius,
       penDistance: roundForRecipe(penDistance),
@@ -712,16 +941,25 @@ function makeClassicParams(seed, shapeSelection) {
 }
 
 function resolveClassicShapeSelection(selection, rng) {
-  const fixedPieceId = FIXED_PIECE_BY_ID[selection?.fixedPieceId]
-    ? selection.fixedPieceId
-    : FIXED_PIECES[randomInt(rng, 0, FIXED_PIECES.length - 1)].id;
+  const outerShapeId = OUTER_SHAPE_BY_ID[selection?.outerShapeId]
+    ? selection.outerShapeId
+    : OUTER_SHAPES[randomInt(rng, 0, OUTER_SHAPES.length - 1)].id;
+  const outerSizeId = OUTER_SIZE_BY_ID[selection?.outerSizeId]
+    ? selection.outerSizeId
+    : OUTER_SIZES[randomInt(rng, 0, OUTER_SIZES.length - 1)].id;
+  const variantId = OUTER_VARIANT_BY_ID[selection?.variantId]
+    ? selection.variantId
+    : OUTER_VARIANTS[randomInt(rng, 0, OUTER_VARIANTS.length - 1)].id;
+  const innerShapeId = INNER_SHAPE_BY_ID[selection?.innerShapeId]
+    ? selection.innerShapeId
+    : INNER_SHAPES[randomInt(rng, 0, INNER_SHAPES.length - 1)].id;
   const wheelId = ROLLING_WHEEL_BY_ID[selection?.wheelId]
     ? selection.wheelId
     : ROLLING_WHEELS[randomInt(rng, 0, ROLLING_WHEELS.length - 1)].id;
   const penHoleId = PEN_HOLE_BY_ID[selection?.penHoleId]
     ? selection.penHoleId
     : PEN_HOLES[randomInt(rng, 0, PEN_HOLES.length - 1)].id;
-  return { fixedPieceId, wheelId, penHoleId };
+  return { outerShapeId, outerSizeId, variantId, innerShapeId, wheelId, penHoleId };
 }
 
 function makeEpicycleParams(seed) {
@@ -814,27 +1052,96 @@ function rawPointForRecipe(activeRecipe, progress) {
     : rawClassicPoint(activeRecipe.params, progress);
 }
 
+// Generalized trochoid: replaces the constant outer radius R with a
+// shape-dependent function R_outer(t), and the unit pen offset with an
+// inner-shape aspect modulation. This is "approximate rolling" — the inner
+// center traces the outer perimeter exactly, while the inner's rotation rate
+// uses the outer's *mean* radius so closure ratios match the classic case.
 function rawClassicPoint(params, progress) {
-  const R = params.fixedRadius;
   const r = params.rollingRadius;
+  const Rmean = Number.isFinite(Number(params.outerMeanRadius))
+    ? Number(params.outerMeanRadius)
+    : params.fixedRadius;
+  const aspectX = Number.isFinite(Number(params.innerAspectX)) ? Number(params.innerAspectX) : 1;
+  const aspectY = Number.isFinite(Number(params.innerAspectY)) ? Number(params.innerAspectY) : 1;
   const baseD = params.penDistance;
   const wobble = params.penWobble || 0;
   const wobbleFrequency = params.wobbleFrequency || 1;
   const wobblePhase = params.wobblePhase || 0;
   const d = baseD * (1 + wobble * Math.sin(TWO_PI_VALUE * wobbleFrequency * progress + wobblePhase));
   const t = params.phase + params.tMax * progress;
-  let x = 0;
-  let y = 0;
+  const Rt = outerRadiusAt(t, params);
+
+  let cx;
+  let cy;
+  let phi;
+  let penX;
+  let penY;
+  let x;
+  let y;
 
   if (params.variant === "epitrochoid") {
-    x = (R + r) * Math.cos(t) - d * Math.cos(((R + r) / r) * t);
-    y = (R + r) * Math.sin(t) - d * Math.sin(((R + r) / r) * t);
+    cx = (Rt + r) * Math.cos(t);
+    cy = (Rt + r) * Math.sin(t);
+    phi = ((Rmean + r) / r) * t;
+    penX = d * aspectX * Math.cos(phi);
+    penY = d * aspectY * Math.sin(phi);
+    x = cx - penX;
+    y = cy - penY;
   } else {
-    x = (R - r) * Math.cos(t) + d * Math.cos(((R - r) / r) * t);
-    y = (R - r) * Math.sin(t) - d * Math.sin(((R - r) / r) * t);
+    cx = (Rt - r) * Math.cos(t);
+    cy = (Rt - r) * Math.sin(t);
+    phi = ((Rmean - r) / r) * t;
+    penX = d * aspectX * Math.cos(phi);
+    penY = d * aspectY * Math.sin(phi);
+    x = cx + penX;
+    y = cy - penY;
   }
 
   return rotatePoint({ x, y }, params.rotation + (params.rotationDrift || 0) * progress);
+}
+
+function outerRadiusAt(t, params) {
+  const R = params.fixedRadius;
+  const shapeId = params.outerShapeId || "circle";
+  return R * outerRadiusUnit(t, shapeId);
+}
+
+// Returns the perimeter radius for a unit-scale outer shape at angle t.
+function outerRadiusUnit(t, shapeId) {
+  switch (shapeId) {
+    case "square": {
+      const c = Math.abs(Math.cos(t));
+      const s = Math.abs(Math.sin(t));
+      const denom = Math.max(c, s);
+      return denom > 1e-6 ? 1 / denom : 1;
+    }
+    case "hexagon": {
+      // Regular hexagon: radius from center to perimeter, smooth between vertices.
+      const sector = Math.PI / 3;
+      const half = Math.PI / 6;
+      const wedge = ((t % sector) + sector) % sector;
+      const denom = Math.cos(wedge - half);
+      return denom > 1e-6 ? Math.cos(half) / denom : 1;
+    }
+    case "star": {
+      // Smooth rosette star: r = 1 + amp * cos(N * t).
+      return 1 + STAR_AMPLITUDE * Math.cos(STAR_POINTS * t);
+    }
+    case "circle":
+    default:
+      return 1;
+  }
+}
+
+function computeOuterMeanRadius(outerShapeId, fixedRadius) {
+  const samples = 256;
+  let sum = 0;
+  for (let i = 0; i < samples; i += 1) {
+    const t = (i / samples) * TWO_PI_VALUE;
+    sum += outerRadiusUnit(t, outerShapeId);
+  }
+  return fixedRadius * (sum / samples);
 }
 
 function rawEpicyclePoint(params, progress) {
@@ -900,7 +1207,12 @@ function renderTrailToStep(step) {
   clearTransparentLayer(baseTrailLayer);
   clearTransparentLayer(recentTrailLayer);
   drawBaseTrailToStep(step, baseTrailLayer, canvasSize);
-  drawRecentTrailToStep(step, recentTrailLayer, canvasSize, playDirection);
+  // In reverse, the user wants the already-drawn line to stay at its dim base
+  // opacity — only the cursor should animate. Skipping the recent-fade keeps
+  // the line steady across the 100% boundary.
+  if (playDirection >= 0) {
+    drawRecentTrailToStep(step, recentTrailLayer, canvasSize, playDirection);
+  }
   renderedStep = step;
   clearSparkles();
   syncProgressUi();
@@ -996,8 +1308,9 @@ function advancePlayback() {
     clearTransparentLayer(recentTrailLayer);
     drawRecentTrailToStep(nextStep, recentTrailLayer, canvasSize, playDirection);
   } else {
+    // Reverse: the line is already fully drawn into baseTrailLayer; clear the
+    // recent-fade so the cursor sweeps back across a steady-opacity line.
     clearTransparentLayer(recentTrailLayer);
-    drawRecentTrailToStep(nextStep, recentTrailLayer, canvasSize, playDirection);
   }
 
   currentStep = nextStep;

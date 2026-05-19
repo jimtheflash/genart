@@ -199,6 +199,10 @@ label,
   gap: 8px;
 }
 
+.icon-row-quad {
+  grid-template-columns: repeat(4, 1fr);
+}
+
 .icon-btn {
   display: grid;
   gap: 4px;
@@ -312,14 +316,30 @@ label,
   gap: 12px;
 }
 
-.color-pickers input[type="color"] {
+.swatch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(28px, 1fr));
+  gap: 6px;
+}
+
+.swatch-btn {
   width: 100%;
-  height: 42px;
-  padding: 2px;
+  aspect-ratio: 1;
+  min-height: 28px;
   border: 1px solid var(--rule);
-  border-radius: 8px;
-  background: #fbfaf6;
+  border-radius: 6px;
   cursor: pointer;
+  padding: 0;
+}
+
+.swatch-btn:hover {
+  border-color: var(--accent-strong);
+}
+
+.swatch-btn.is-active {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: var(--accent);
 }
 
 select,
