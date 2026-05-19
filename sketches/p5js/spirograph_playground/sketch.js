@@ -4,8 +4,11 @@
 
 const PALETTE_URL = "./palettes.yml";
 const FALLBACK_PALETTES = [
-  { name: "fallback_black_on_white", background: [255, 255, 255], points: [0, 0, 0], alpha: 190 },
+  { name: "fallback_black_on_white", background: [255, 255, 255], points: [0, 0, 0] },
 ];
+const DEFAULT_BG = [255, 255, 255];
+const DEFAULT_FG = [0, 0, 0];
+const TRAIL_ALPHA = 180;
 const TWO_PI_VALUE = Math.PI * 2;
 const PREVIEW_EXPORT_SIZE = 900;
 const MAX_PLAYBACK_STEPS_PER_FRAME = 2400;
@@ -17,9 +20,7 @@ const FIT_SAMPLE_POINTS = 120000;
 const MIN_DRAW_SPEED = 0.01;
 const MAX_DRAW_SPEED = 1;
 const DISPLAY_FRAME_RATE = 60;
-const RECIPE_VERSION = 2;
-const SHAPE_RANDOM_VALUE = "random";
-const MIN_TRAIL_ALPHA = 150;
+const RECIPE_VERSION = 3;
 const PERMANENT_TRAIL_OPACITY = 0.1;
 const RECENT_TRAIL_OPACITY = 0.9;
 const FRESH_TRAIL_REPEATS = 1;
@@ -27,17 +28,17 @@ const RECENT_FADE_REPEATS = 6;
 const RECENT_FADE_CHUNKS = 18;
 const RECENT_CHUNK_VERTEX_LIMIT = 9000;
 const FIXED_PIECES = [
-  { id: "ring96", label: "Ring 96", radius: 96, variant: "hypotrochoid" },
-  { id: "ring120", label: "Ring 120", radius: 120, variant: "hypotrochoid" },
-  { id: "outer72", label: "Outer gear 72", radius: 72, variant: "epitrochoid" },
-  { id: "outer96", label: "Outer gear 96", radius: 96, variant: "epitrochoid" },
+  { id: "ring96", label: "96", radius: 96, variant: "hypotrochoid" },
+  { id: "ring120", label: "120", radius: 120, variant: "hypotrochoid" },
+  { id: "outer72", label: "72", radius: 72, variant: "epitrochoid" },
+  { id: "outer96", label: "96", radius: 96, variant: "epitrochoid" },
 ];
 const ROLLING_WHEELS = [
-  { id: "wheel24", label: "Wheel 24", radius: 24 },
-  { id: "wheel32", label: "Wheel 32", radius: 32 },
-  { id: "wheel40", label: "Wheel 40", radius: 40 },
-  { id: "wheel52", label: "Wheel 52", radius: 52 },
-  { id: "wheel64", label: "Wheel 64", radius: 64 },
+  { id: "wheel24", label: "24", radius: 24 },
+  { id: "wheel32", label: "32", radius: 32 },
+  { id: "wheel40", label: "40", radius: 40 },
+  { id: "wheel52", label: "52", radius: 52 },
+  { id: "wheel64", label: "64", radius: 64 },
 ];
 const PEN_HOLES = [
   { id: "nearCenter", label: "Near center", ratio: 0.34 },
@@ -45,11 +46,6 @@ const PEN_HOLES = [
   { id: "nearEdge", label: "Near edge", ratio: 0.88 },
   { id: "outerReach", label: "Outer reach", ratio: 1.16 },
 ];
-const DEFAULT_SHAPE_SELECTION = {
-  fixedPieceId: SHAPE_RANDOM_VALUE,
-  wheelId: SHAPE_RANDOM_VALUE,
-  penHoleId: SHAPE_RANDOM_VALUE,
-};
 const FIXED_PIECE_BY_ID = Object.fromEntries(FIXED_PIECES.map((piece) => [piece.id, piece]));
 const ROLLING_WHEEL_BY_ID = Object.fromEntries(ROLLING_WHEELS.map((wheel) => [wheel.id, wheel]));
 const PEN_HOLE_BY_ID = Object.fromEntries(PEN_HOLES.map((hole) => [hole.id, hole]));
@@ -67,7 +63,6 @@ let currentStep = 0;
 let renderedStep = 0;
 let isPlaying = true;
 let playDirection = 1;
-let paletteLoadMessage = "Using fallback palette";
 
 function setup() {
   pixelDensity(1);
@@ -76,6 +71,7 @@ function setup() {
   canvas.elt.addEventListener("contextmenu", (event) => event.preventDefault());
 
   cacheUi();
+  buildShapeControls();
   installUiEvents();
   ui.speedRange.value = formatSpeedValue(MAX_DRAW_SPEED);
   syncSpeedUi();
@@ -83,8 +79,6 @@ function setup() {
 
   loadPalettes().then((loadedPalettes) => {
     palettes = loadedPalettes.length > 0 ? loadedPalettes : FALLBACK_PALETTES.slice();
-    paletteLoadMessage = `Loaded ${palettes.length} palettes`;
-    populatePaletteSelect();
     randomizeArtwork();
   });
 }
@@ -99,14 +93,13 @@ function draw() {
     advancePlayback();
   }
 
-  const palette = activePalette();
-  syncArtworkBackground(palette);
-  background(...palette.background);
+  const colors = activeColors();
+  syncArtworkBackground(colors);
+  background(...colors.background);
   image(baseTrailLayer, 0, 0);
   image(recentTrailLayer, 0, 0);
   updateSparkles();
   image(sparkLayer, 0, 0);
-  syncPlaybackUi();
 }
 
 function windowResized() {
@@ -117,15 +110,28 @@ function cacheUi() {
   ui = {
     modeSelect: document.getElementById("modeSelect"),
     shapeControls: document.getElementById("shapeControls"),
-    fixedPieceSelect: document.getElementById("fixedPieceSelect"),
-    wheelSelect: document.getElementById("wheelSelect"),
-    penHoleSelect: document.getElementById("penHoleSelect"),
-    paletteSelect: document.getElementById("paletteSelect"),
+    fixedVariantRow: document.getElementById("fixedVariantRow"),
+    fixedSizeRow: document.getElementById("fixedSizeRow"),
+    wheelSizeRow: document.getElementById("wheelSizeRow"),
+    wheelIcon: document.getElementById("wheelIcon"),
+    penHoleDots: document.getElementById("penHoleDots"),
+    epicycleControls: document.getElementById("epicycleControls"),
+    epiSymmetryRange: document.getElementById("epiSymmetryRange"),
+    epiSymmetryValue: document.getElementById("epiSymmetryValue"),
+    epiWobbleAmountRange: document.getElementById("epiWobbleAmountRange"),
+    epiWobbleAmountValue: document.getElementById("epiWobbleAmountValue"),
+    epiWobbleFreqRange: document.getElementById("epiWobbleFreqRange"),
+    epiWobbleFreqValue: document.getElementById("epiWobbleFreqValue"),
+    epiRotationDriftRange: document.getElementById("epiRotationDriftRange"),
+    epiRotationDriftValue: document.getElementById("epiRotationDriftValue"),
+    bgColorInput: document.getElementById("bgColorInput"),
+    fgColorInput: document.getElementById("fgColorInput"),
     randomizeBtn: document.getElementById("randomizeBtn"),
     restartBtn: document.getElementById("restartBtn"),
     playPauseBtn: document.getElementById("playPauseBtn"),
     jumpEndBtn: document.getElementById("jumpEndBtn"),
     fullscreenBtn: document.getElementById("fullscreenBtn"),
+    fullscreenExitBtn: document.getElementById("fullscreenExitBtn"),
     speedRange: document.getElementById("speedRange"),
     speedValue: document.getElementById("speedValue"),
     progressRange: document.getElementById("progressRange"),
@@ -135,8 +141,6 @@ function cacheUi() {
     saveRecipeBtn: document.getElementById("saveRecipeBtn"),
     loadRecipeBtn: document.getElementById("loadRecipeBtn"),
     recipeBox: document.getElementById("recipeBox"),
-    statusLine: document.getElementById("statusLine"),
-    paletteBrowser: document.getElementById("paletteBrowser"),
     canvasStage: document.querySelector(".canvas-stage"),
     controlsPane: document.getElementById("controlsPane"),
     controlsToggleBtn: document.getElementById("controlsToggleBtn"),
@@ -146,14 +150,52 @@ function cacheUi() {
   };
 }
 
+function buildShapeControls() {
+  ui.fixedSizeRow.innerHTML = "";
+  ui.wheelSizeRow.innerHTML = "";
+  ui.penHoleDots.innerHTML = "";
+
+  FIXED_PIECES.forEach((piece) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "size-btn";
+    button.dataset.fixedId = piece.id;
+    button.dataset.variant = piece.variant;
+    button.textContent = piece.label;
+    button.setAttribute("aria-label", `${piece.variant === "hypotrochoid" ? "Ring" : "Outer gear"} radius ${piece.radius}`);
+    ui.fixedSizeRow.appendChild(button);
+  });
+
+  ROLLING_WHEELS.forEach((wheel) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "size-btn";
+    button.dataset.wheelId = wheel.id;
+    button.textContent = wheel.label;
+    button.setAttribute("aria-label", `Wheel radius ${wheel.radius}`);
+    ui.wheelSizeRow.appendChild(button);
+  });
+
+  const wheelIconRadius = 32;
+  const svgNs = "http://www.w3.org/2000/svg";
+  PEN_HOLES.forEach((hole) => {
+    const cx = wheelIconRadius * hole.ratio;
+    const dot = document.createElementNS(svgNs, "circle");
+    dot.setAttribute("cx", String(cx));
+    dot.setAttribute("cy", "0");
+    dot.setAttribute("r", "3.4");
+    dot.classList.add("pen-hole-dot");
+    dot.dataset.penHoleId = hole.id;
+    const title = document.createElementNS(svgNs, "title");
+    title.textContent = hole.label;
+    dot.appendChild(title);
+    ui.penHoleDots.appendChild(dot);
+  });
+}
+
 function installUiEvents() {
   ui.modeSelect.addEventListener("change", () => {
     randomizeArtwork({ mode: ui.modeSelect.value });
-  });
-
-  ui.paletteSelect.addEventListener("change", () => {
-    if (!recipe) return;
-    selectPalette(Number(ui.paletteSelect.value));
   });
 
   ui.randomizeBtn.addEventListener("click", () => randomizeArtwork());
@@ -161,13 +203,43 @@ function installUiEvents() {
   ui.playPauseBtn.addEventListener("click", togglePlayback);
   ui.jumpEndBtn.addEventListener("click", jumpToEnd);
   ui.fullscreenBtn.addEventListener("click", enterFullscreen);
+  ui.fullscreenExitBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    exitAppFullscreen();
+  });
   ui.mobileRandomBtn.addEventListener("click", () => randomizeArtwork());
   ui.mobilePlayPauseBtn.addEventListener("click", togglePlayback);
   ui.mobileFullscreenBtn.addEventListener("click", enterFullscreen);
   ui.controlsToggleBtn.addEventListener("click", toggleControlsDrawer);
-  [ui.fixedPieceSelect, ui.wheelSelect, ui.penHoleSelect].forEach((select) => {
-    select.addEventListener("change", handleShapeControlChange);
+
+  ui.canvasStage.addEventListener("click", handleCanvasStageTap);
+
+  ui.fixedVariantRow.querySelectorAll("[data-variant]").forEach((btn) => {
+    btn.addEventListener("click", () => applyFixedVariant(btn.dataset.variant));
   });
+  ui.fixedSizeRow.addEventListener("click", (event) => {
+    const target = event.target.closest("[data-fixed-id]");
+    if (!target) return;
+    applyShapeChange({ fixedPieceId: target.dataset.fixedId });
+  });
+  ui.wheelSizeRow.addEventListener("click", (event) => {
+    const target = event.target.closest("[data-wheel-id]");
+    if (!target) return;
+    applyShapeChange({ wheelId: target.dataset.wheelId });
+  });
+  ui.penHoleDots.addEventListener("click", (event) => {
+    const target = event.target.closest("[data-pen-hole-id]");
+    if (!target) return;
+    applyShapeChange({ penHoleId: target.dataset.penHoleId });
+  });
+
+  ui.epiSymmetryRange.addEventListener("input", () => applyEpicycleChange("symmetry", Number(ui.epiSymmetryRange.value)));
+  ui.epiWobbleAmountRange.addEventListener("input", () => applyEpicycleChange("wobbleAmount", Number(ui.epiWobbleAmountRange.value)));
+  ui.epiWobbleFreqRange.addEventListener("input", () => applyEpicycleChange("wobbleFrequency", Number(ui.epiWobbleFreqRange.value)));
+  ui.epiRotationDriftRange.addEventListener("input", () => applyEpicycleChange("rotationDrift", Number(ui.epiRotationDriftRange.value) * Math.PI));
+
+  ui.bgColorInput.addEventListener("input", () => applyColorChange("background", ui.bgColorInput.value));
+  ui.fgColorInput.addEventListener("input", () => applyColorChange("points", ui.fgColorInput.value));
 
   ui.speedRange.addEventListener("input", () => {
     if (recipe) {
@@ -203,6 +275,12 @@ function installUiEvents() {
   });
 }
 
+function handleCanvasStageTap(event) {
+  if (!ui.canvasStage.classList.contains("is-app-fullscreen")) return;
+  if (event.target.closest(".fullscreen-toolbar")) return;
+  ui.canvasStage.classList.toggle("controls-visible");
+}
+
 async function loadPalettes() {
   try {
     const response = await fetch(PALETTE_URL, { cache: "no-store" });
@@ -211,7 +289,6 @@ async function loadPalettes() {
     }
     return parsePaletteYaml(await response.text());
   } catch (error) {
-    paletteLoadMessage = "Palette YAML unavailable";
     console.warn(error);
     return FALLBACK_PALETTES.slice();
   }
@@ -242,7 +319,6 @@ function parsePaletteYaml(text) {
     if (key === "name") current.name = value;
     if (key === "background") current.background = parseRgb(value);
     if (key === "points") current.points = parseRgb(value);
-    if (key === "alpha") current.alpha = clamp(Number(value), 0, 255);
   });
 
   pushPaletteIfValid(parsed, current);
@@ -252,7 +328,7 @@ function parsePaletteYaml(text) {
 function pushPaletteIfValid(list, item) {
   if (!item) return;
   const hasRgb = Array.isArray(item.background) && Array.isArray(item.points);
-  if (!item.name || !hasRgb || !Number.isFinite(item.alpha)) return;
+  if (!item.name || !hasRgb) return;
   list.push(item);
 }
 
@@ -266,58 +342,30 @@ function parseRgb(value) {
   return channels.length === 3 && channels.every(Number.isFinite) ? channels : null;
 }
 
-function populatePaletteSelect() {
-  ui.paletteSelect.innerHTML = "";
-  ui.paletteBrowser.innerHTML = "";
-  palettes.forEach((palette, index) => {
-    const option = document.createElement("option");
-    option.value = String(index);
-    option.textContent = palette.name;
-    ui.paletteSelect.appendChild(option);
-
-    const swatch = document.createElement("button");
-    swatch.type = "button";
-    swatch.className = "palette-swatch";
-    swatch.dataset.paletteIndex = String(index);
-    swatch.setAttribute("aria-label", `Use ${palette.name} palette`);
-    swatch.innerHTML = `
-      <span class="swatch-chip" aria-hidden="true"></span>
-      <span class="swatch-name">${escapeHtml(palette.name)}</span>
-    `;
-
-    const chip = swatch.querySelector(".swatch-chip");
-    chip.style.background = `linear-gradient(135deg, rgb(${palette.background.join(",")}) 0 49%, rgb(${palette.points.join(",")}) 51% 100%)`;
-
-    swatch.addEventListener("click", () => selectPalette(index));
-    ui.paletteBrowser.appendChild(swatch);
-  });
-  syncPaletteBrowser();
-}
-
-function selectPalette(paletteIndex) {
-  if (!recipe) return;
-  const safePaletteIndex = resolvePaletteIndex(paletteIndex);
-  recipe.paletteIndex = safePaletteIndex;
-  recipe.paletteName = palettes[safePaletteIndex].name;
-  ui.paletteSelect.value = String(safePaletteIndex);
-  syncArtworkBackground(palettes[safePaletteIndex]);
-  syncPaletteBrowser();
-  renderTrailToStep(currentStep);
-  syncRecipeBox();
-}
-
 function randomizeArtwork(overrides = {}) {
   const mode = overrides.mode || ui.modeSelect.value || "classic";
-  const paletteIndex = resolvePaletteIndex(overrides.paletteIndex ?? ui.paletteSelect.value);
-  const shapeSelection = overrides.shapeSelection || readShapeSelection();
   const seed = makeRecipeSeed();
-  const nextRecipe = makeRecipe({ mode, seed, paletteIndex, shapeSelection });
+  const colors = overrides.colors || pickRandomColors(seed);
+  const shapeSelection = overrides.shapeSelection;
+  const nextRecipe = makeRecipe({ mode, seed, colors, shapeSelection });
   applyRecipe(nextRecipe, { startPlaying: true });
 }
 
-function makeRecipe({ mode, seed, paletteIndex, shapeSelection = DEFAULT_SHAPE_SELECTION }) {
+function pickRandomColors(seed) {
+  if (palettes.length === 0) {
+    return { background: DEFAULT_BG.slice(), points: DEFAULT_FG.slice() };
+  }
+  const rng = mulberry32(seed ^ 0xa1b2c3d4);
+  const choice = palettes[Math.floor(rng() * palettes.length) % palettes.length];
+  return {
+    background: choice.background.slice(),
+    points: choice.points.slice(),
+  };
+}
+
+function makeRecipe({ mode, seed, colors, shapeSelection }) {
   const safeMode = mode === "epicycle" ? "epicycle" : "classic";
-  const safePaletteIndex = resolvePaletteIndex(paletteIndex);
+  const safeColors = normalizeColors(colors);
   const generated =
     safeMode === "epicycle" ? makeEpicycleParams(seed) : makeClassicParams(seed, shapeSelection);
 
@@ -326,8 +374,7 @@ function makeRecipe({ mode, seed, paletteIndex, shapeSelection = DEFAULT_SHAPE_S
     app: "spirograph_playground",
     mode: safeMode,
     seed,
-    paletteIndex: safePaletteIndex,
-    paletteName: palettes[safePaletteIndex].name,
+    colors: safeColors,
     canvas: { aspect: 1 },
     totalSteps: generated.totalSteps,
     drawSpeed: normalizeDrawSpeed(ui.speedRange.value),
@@ -346,39 +393,37 @@ function applyRecipe(nextRecipe, options = {}) {
   isPlaying = options.startPlaying ?? false;
 
   ui.modeSelect.value = recipe.mode;
-  ui.paletteSelect.value = String(recipe.paletteIndex);
   ui.speedRange.value = formatSpeedValue(recipe.drawSpeed);
   ui.progressRange.max = String(recipe.totalSteps);
   ui.progressRange.value = String(currentStep);
+  ui.bgColorInput.value = rgbToHex(recipe.colors.background);
+  ui.fgColorInput.value = rgbToHex(recipe.colors.points);
 
-  syncArtworkBackground(activePalette());
+  syncArtworkBackground(recipe.colors);
   syncShapeControls();
+  syncEpicycleControls();
   syncSpeedUi();
-  syncPaletteBrowser();
   syncRecipeBox();
   renderTrailToStep(currentStep);
+  syncProgressUi();
+  syncPlaybackUi();
+  syncFullscreenUi();
 }
 
 function normalizeRecipe(source) {
   const mode = source.mode === "epicycle" ? "epicycle" : "classic";
   const seed = Number.isFinite(Number(source.seed)) ? Number(source.seed) >>> 0 : makeRecipeSeed();
-  let paletteIndex = resolvePaletteIndex(source.paletteIndex);
-
-  if (source.paletteName) {
-    const foundIndex = palettes.findIndex((palette) => palette.name === source.paletteName);
-    if (foundIndex >= 0) paletteIndex = foundIndex;
-  }
-
-  const fallback = makeRecipe({ mode, seed, paletteIndex, shapeSelection: source.shape });
+  const colors = colorsFromRecipeSource(source, seed);
+  const fallback = makeRecipe({ mode, seed, colors, shapeSelection: source.shape });
   const totalSteps = clamp(
     Math.round(Number(source.totalSteps || fallback.totalSteps)),
     1200,
     MAX_TOTAL_STEPS,
   );
   const drawSpeed = normalizeDrawSpeed(source.drawSpeed ?? ui.speedRange.value);
-  const currentStep = clamp(Math.round(Number(source.currentStep || 0)), 0, totalSteps);
-  const progressPercent = totalSteps > 0 ? roundForRecipe((currentStep / totalSteps) * 100) : 0;
-  const playDirection = source.playDirection === -1 ? -1 : 1;
+  const currentStepValue = clamp(Math.round(Number(source.currentStep || 0)), 0, totalSteps);
+  const progressPercent = totalSteps > 0 ? roundForRecipe((currentStepValue / totalSteps) * 100) : 0;
+  const playDirectionValue = source.playDirection === -1 ? -1 : 1;
   const params =
     mode === "epicycle"
       ? normalizeEpicycleParams(source.params || fallback.params)
@@ -397,60 +442,144 @@ function normalizeRecipe(source) {
     app: "spirograph_playground",
     mode,
     seed,
-    paletteIndex,
-    paletteName: palettes[paletteIndex].name,
+    colors,
     canvas: { aspect: 1 },
     totalSteps,
     drawSpeed,
-    currentStep,
+    currentStep: currentStepValue,
     progressPercent,
-    playDirection,
+    playDirection: playDirectionValue,
     ...(shape ? { shape } : {}),
     params,
   };
 }
 
-function handleShapeControlChange() {
-  if (!recipe) return;
-  ui.modeSelect.value = "classic";
-  randomizeArtwork({ mode: "classic", shapeSelection: readShapeSelection() });
+function colorsFromRecipeSource(source, seed) {
+  if (source.colors && Array.isArray(source.colors.background) && Array.isArray(source.colors.points)) {
+    return normalizeColors(source.colors);
+  }
+  if (source.paletteName) {
+    const found = palettes.find((palette) => palette.name === source.paletteName);
+    if (found) return normalizeColors({ background: found.background, points: found.points });
+  }
+  if (Number.isInteger(source.paletteIndex) && palettes[source.paletteIndex]) {
+    const palette = palettes[source.paletteIndex];
+    return normalizeColors({ background: palette.background, points: palette.points });
+  }
+  return pickRandomColors(seed);
 }
 
-function readShapeSelection() {
-  return {
-    fixedPieceId: ui.fixedPieceSelect?.value || SHAPE_RANDOM_VALUE,
-    wheelId: ui.wheelSelect?.value || SHAPE_RANDOM_VALUE,
-    penHoleId: ui.penHoleSelect?.value || SHAPE_RANDOM_VALUE,
-  };
+function normalizeColors(colors) {
+  const background = Array.isArray(colors?.background) ? clampRgb(colors.background) : DEFAULT_BG.slice();
+  const points = Array.isArray(colors?.points) ? clampRgb(colors.points) : DEFAULT_FG.slice();
+  return { background, points };
+}
+
+function clampRgb(rgb) {
+  return [0, 1, 2].map((i) => clamp(Math.round(Number(rgb[i]) || 0), 0, 255));
+}
+
+function applyFixedVariant(variant) {
+  if (!recipe || recipe.mode !== "classic") return;
+  const matching = FIXED_PIECES.filter((piece) => piece.variant === variant);
+  if (matching.length === 0) return;
+  const currentPiece = FIXED_PIECE_BY_ID[recipe.shape?.fixedPieceId];
+  const nextPiece = currentPiece && currentPiece.variant === variant ? currentPiece : matching[0];
+  applyShapeChange({ fixedPieceId: nextPiece.id });
+}
+
+function applyShapeChange(partial) {
+  if (!recipe || recipe.mode !== "classic") return;
+  const nextShape = { ...recipe.shape, ...partial };
+  const generated = makeClassicParams(recipe.seed, nextShape);
+  recipe.shape = generated.shape;
+  recipe.params = generated.params;
+  pathPoints = generatePathPoints(recipe);
+  currentStep = clamp(currentStep, 0, recipe.totalSteps);
+  syncShapeControls();
+  syncRecipeBox();
+  renderTrailToStep(currentStep);
+  syncProgressUi();
+}
+
+function applyEpicycleChange(key, value) {
+  if (!recipe || recipe.mode !== "epicycle") return;
+  recipe.params = normalizeEpicycleParams({ ...recipe.params, [key]: value });
+  pathPoints = generatePathPoints(recipe);
+  currentStep = clamp(currentStep, 0, recipe.totalSteps);
+  syncEpicycleControls();
+  syncRecipeBox();
+  renderTrailToStep(currentStep);
+  syncProgressUi();
+}
+
+function applyColorChange(channel, hexValue) {
+  if (!recipe) return;
+  const rgb = hexToRgb(hexValue);
+  if (!rgb) return;
+  recipe.colors = normalizeColors({ ...recipe.colors, [channel]: rgb });
+  syncArtworkBackground(recipe.colors);
+  renderTrailToStep(currentStep);
+  syncRecipeBox();
 }
 
 function syncShapeControls() {
-  if (!ui.shapeControls || !ui.fixedPieceSelect || !ui.wheelSelect || !ui.penHoleSelect) return;
+  if (!ui.shapeControls) return;
   const classicActive = recipe?.mode === "classic";
-  [ui.fixedPieceSelect, ui.wheelSelect, ui.penHoleSelect].forEach((select) => {
-    select.disabled = !classicActive;
-  });
   ui.shapeControls.classList.toggle("is-disabled", !classicActive);
+  ui.shapeControls.hidden = !classicActive;
+  ui.epicycleControls.hidden = classicActive;
 
   if (!classicActive || !recipe.shape) return;
-  ui.fixedPieceSelect.value = recipe.shape.fixedPieceId;
-  ui.wheelSelect.value = recipe.shape.wheelId;
-  ui.penHoleSelect.value = recipe.shape.penHoleId;
+
+  const activeFixed = FIXED_PIECE_BY_ID[recipe.shape.fixedPieceId];
+  const activeVariant = activeFixed ? activeFixed.variant : "hypotrochoid";
+
+  ui.fixedVariantRow.querySelectorAll("[data-variant]").forEach((btn) => {
+    const matches = btn.dataset.variant === activeVariant;
+    btn.classList.toggle("is-active", matches);
+    btn.setAttribute("aria-pressed", String(matches));
+  });
+
+  ui.fixedSizeRow.querySelectorAll("[data-fixed-id]").forEach((btn) => {
+    const visible = btn.dataset.variant === activeVariant;
+    btn.style.display = visible ? "" : "none";
+    const matches = btn.dataset.fixedId === recipe.shape.fixedPieceId;
+    btn.classList.toggle("is-active", matches);
+    btn.setAttribute("aria-pressed", String(matches));
+  });
+
+  ui.wheelSizeRow.querySelectorAll("[data-wheel-id]").forEach((btn) => {
+    const matches = btn.dataset.wheelId === recipe.shape.wheelId;
+    btn.classList.toggle("is-active", matches);
+    btn.setAttribute("aria-pressed", String(matches));
+  });
+
+  ui.penHoleDots.querySelectorAll("[data-pen-hole-id]").forEach((dot) => {
+    const matches = dot.dataset.penHoleId === recipe.shape.penHoleId;
+    dot.classList.toggle("is-active", matches);
+  });
 }
 
-function resolveClassicShape(selection, rng) {
-  return {
-    fixedPieceId: resolveShapeChoice(selection?.fixedPieceId, FIXED_PIECES, rng),
-    wheelId: resolveShapeChoice(selection?.wheelId, ROLLING_WHEELS, rng),
-    penHoleId: resolveShapeChoice(selection?.penHoleId, PEN_HOLES, rng),
-  };
-}
+function syncEpicycleControls() {
+  if (!ui.epicycleControls) return;
+  const epicycleActive = recipe?.mode === "epicycle";
+  ui.epicycleControls.hidden = !epicycleActive;
+  if (!epicycleActive || !recipe.params) return;
 
-function resolveShapeChoice(value, definitions, rng) {
-  if (value && value !== SHAPE_RANDOM_VALUE && definitions.some((item) => item.id === value)) {
-    return value;
-  }
-  return definitions[randomInt(rng, 0, definitions.length - 1)].id;
+  const symmetry = Math.round(Number(recipe.params.symmetry) || 4);
+  const wobbleAmount = Number(recipe.params.wobbleAmount) || 0;
+  const wobbleFreq = Number(recipe.params.wobbleFrequency) || 1;
+  const driftPi = (Number(recipe.params.rotationDrift) || 0) / Math.PI;
+
+  ui.epiSymmetryRange.value = String(clamp(symmetry, 3, 9));
+  ui.epiSymmetryValue.textContent = String(clamp(symmetry, 3, 9));
+  ui.epiWobbleAmountRange.value = String(clamp(wobbleAmount, 0, 0.2));
+  ui.epiWobbleAmountValue.textContent = wobbleAmount.toFixed(2);
+  ui.epiWobbleFreqRange.value = String(clamp(wobbleFreq, 0.5, 8));
+  ui.epiWobbleFreqValue.textContent = wobbleFreq.toFixed(1);
+  ui.epiRotationDriftRange.value = String(clamp(driftPi, -10, 10));
+  ui.epiRotationDriftValue.textContent = driftPi.toFixed(1);
 }
 
 function normalizeClassicShape(sourceShape, params) {
@@ -540,9 +669,9 @@ function closestBy(items, value, key) {
   }, items[0]);
 }
 
-function makeClassicParams(seed, shapeSelection = DEFAULT_SHAPE_SELECTION) {
+function makeClassicParams(seed, shapeSelection) {
   const rng = mulberry32(seed);
-  const shape = resolveClassicShape(shapeSelection, rng);
+  const shape = resolveClassicShapeSelection(shapeSelection, rng);
   const fixedPiece = FIXED_PIECE_BY_ID[shape.fixedPieceId];
   const wheel = ROLLING_WHEEL_BY_ID[shape.wheelId];
   const penHole = PEN_HOLE_BY_ID[shape.penHoleId];
@@ -580,6 +709,19 @@ function makeClassicParams(seed, shapeSelection = DEFAULT_SHAPE_SELECTION) {
       tMax: roundForRecipe(TWO_PI_VALUE * closeTurns * passCount),
     },
   };
+}
+
+function resolveClassicShapeSelection(selection, rng) {
+  const fixedPieceId = FIXED_PIECE_BY_ID[selection?.fixedPieceId]
+    ? selection.fixedPieceId
+    : FIXED_PIECES[randomInt(rng, 0, FIXED_PIECES.length - 1)].id;
+  const wheelId = ROLLING_WHEEL_BY_ID[selection?.wheelId]
+    ? selection.wheelId
+    : ROLLING_WHEELS[randomInt(rng, 0, ROLLING_WHEELS.length - 1)].id;
+  const penHoleId = PEN_HOLE_BY_ID[selection?.penHoleId]
+    ? selection.penHoleId
+    : PEN_HOLES[randomInt(rng, 0, PEN_HOLES.length - 1)].id;
+  return { fixedPieceId, wheelId, penHoleId };
 }
 
 function makeEpicycleParams(seed) {
@@ -758,7 +900,7 @@ function renderTrailToStep(step) {
   clearTransparentLayer(baseTrailLayer);
   clearTransparentLayer(recentTrailLayer);
   drawBaseTrailToStep(step, baseTrailLayer, canvasSize);
-  drawRecentTrailToStep(step, recentTrailLayer, canvasSize);
+  drawRecentTrailToStep(step, recentTrailLayer, canvasSize, playDirection);
   renderedStep = step;
   clearSparkles();
   syncProgressUi();
@@ -769,12 +911,12 @@ function clearTransparentLayer(target) {
 }
 
 function drawTrailCompositeToStep(step, target, size) {
-  const palette = activePalette();
+  const colors = activeColors();
   target.push();
-  target.background(...palette.background);
+  target.background(...colors.background);
   target.pop();
   drawBaseTrailToStep(step, target, size);
-  drawRecentTrailToStep(step, target, size);
+  drawRecentTrailToStep(step, target, size, playDirection);
 }
 
 function drawBaseTrailToStep(step, target, size) {
@@ -783,19 +925,32 @@ function drawBaseTrailToStep(step, target, size) {
 
 function drawBaseTrailSegment(fromStep, toStep, target, size) {
   if (!recipe || toStep <= fromStep || pathPoints.length === 0) return;
-  const palette = activePalette();
-  const alpha = trailAlphaForPalette(palette) * PERMANENT_TRAIL_OPACITY;
+  const colors = activeColors();
+  const alpha = TRAIL_ALPHA * PERMANENT_TRAIL_OPACITY;
   const start = clamp(Math.floor(fromStep), 0, recipe.totalSteps);
   const end = clamp(Math.floor(toStep), 0, recipe.totalSteps);
-  drawTrailRange(start, end, target, size, palette, alpha);
+  drawTrailRange(start, end, target, size, colors, alpha);
 }
 
-function drawRecentTrailToStep(step, target, size) {
-  if (!recipe || step <= 0 || pathPoints.length === 0) return;
-  const palette = activePalette();
-  const end = clamp(Math.floor(step), 0, recipe.totalSteps);
+function drawRecentTrailToStep(step, target, size, direction = 1) {
+  if (!recipe || pathPoints.length === 0) return;
+  const colors = activeColors();
+  const focusStep = clamp(Math.floor(step), 0, recipe.totalSteps);
   const windowSteps = recentFadeWindowSteps(recipe);
-  const start = Math.max(0, end - windowSteps);
+
+  let start;
+  let end;
+  let peakStep;
+  if (direction >= 0) {
+    start = Math.max(0, focusStep - windowSteps);
+    end = focusStep;
+    peakStep = end;
+  } else {
+    start = focusStep;
+    end = Math.min(recipe.totalSteps, focusStep + windowSteps);
+    peakStep = start;
+  }
+
   const span = end - start;
   if (span <= 0) return;
 
@@ -808,33 +963,23 @@ function drawRecentTrailToStep(step, target, size) {
     const chunkEnd = Math.min(end, Math.floor(start + chunkSize * (chunkIndex + 1)));
     if (chunkEnd <= chunkStart) continue;
     const midpoint = (chunkStart + chunkEnd) * 0.5;
-    const age = end - midpoint;
+    const age = Math.abs(peakStep - midpoint);
     const opacity = recentTrailOpacityForAge(age, recipe);
-    const alpha = trailAlphaForPalette(palette) * RECENT_TRAIL_OPACITY * opacity;
-    drawTrailRange(chunkStart, chunkEnd, target, size, palette, alpha, RECENT_CHUNK_VERTEX_LIMIT);
+    const alpha = TRAIL_ALPHA * RECENT_TRAIL_OPACITY * opacity;
+    drawTrailRange(chunkStart, chunkEnd, target, size, colors, alpha, RECENT_CHUNK_VERTEX_LIMIT);
   }
 }
 
-function drawTrailRange(start, end, target, size, palette, alpha, maxVertices = MAX_REDRAW_VERTICES) {
+function drawTrailRange(start, end, target, size, colors, alpha, maxVertices = MAX_REDRAW_VERTICES) {
   if (end <= start) return;
   if (alpha <= 0.2) return;
-  const darkBackground = isDarkPalette(palette);
-  const coreWeight = Math.max(1.8, size / 410);
+  const coreWeight = Math.max(3.6, size / 205);
 
   target.push();
   target.noFill();
   target.strokeJoin(ROUND);
   target.strokeCap(ROUND);
-  if (darkBackground) {
-    target.drawingContext.save();
-    target.drawingContext.shadowBlur = Math.max(2.5, size * 0.006);
-    target.drawingContext.shadowColor = rgbaString(palette.points, Math.min(0.3, alpha / 255));
-    target.stroke(...palette.points, alpha * 0.55);
-    target.strokeWeight(coreWeight);
-    drawPathShape(target, start, end, size, maxVertices);
-    target.drawingContext.restore();
-  }
-  target.stroke(...palette.points, alpha);
+  target.stroke(...colors.points, alpha);
   target.strokeWeight(coreWeight);
   drawPathShape(target, start, end, size, maxVertices);
   target.pop();
@@ -849,9 +994,10 @@ function advancePlayback() {
   if (playDirection > 0) {
     drawBaseTrailSegment(currentStep, nextStep, baseTrailLayer, canvasSize);
     clearTransparentLayer(recentTrailLayer);
-    drawRecentTrailToStep(nextStep, recentTrailLayer, canvasSize);
+    drawRecentTrailToStep(nextStep, recentTrailLayer, canvasSize, playDirection);
   } else {
-    renderTrailToStep(nextStep);
+    clearTransparentLayer(recentTrailLayer);
+    drawRecentTrailToStep(nextStep, recentTrailLayer, canvasSize, playDirection);
   }
 
   currentStep = nextStep;
@@ -951,6 +1097,7 @@ function enterFullscreen() {
 
 function enterAppFullscreen() {
   ui.canvasStage.classList.add("is-app-fullscreen");
+  ui.canvasStage.classList.remove("controls-visible");
   document.body.classList.add("has-app-fullscreen");
   resizeArtworkCanvas();
   syncFullscreenUi();
@@ -958,6 +1105,7 @@ function enterAppFullscreen() {
 
 function exitAppFullscreen() {
   ui.canvasStage.classList.remove("is-app-fullscreen");
+  ui.canvasStage.classList.remove("controls-visible");
   document.body.classList.remove("has-app-fullscreen");
   resizeArtworkCanvas();
   syncFullscreenUi();
@@ -1025,7 +1173,6 @@ function syncProgressUi() {
   ui.progressRange.max = String(recipe.totalSteps);
   ui.progressRange.value = String(currentStep);
   ui.progressValue.textContent = `${Math.round((currentStep / recipe.totalSteps) * 100)}%`;
-  syncStatus();
 }
 
 function syncPlaybackUi() {
@@ -1040,35 +1187,12 @@ function toggleControlsDrawer() {
   ui.controlsToggleBtn.setAttribute("aria-expanded", String(isOpen));
 }
 
-function syncPaletteBrowser() {
-  if (!ui.paletteBrowser || !recipe) return;
-  ui.paletteBrowser.querySelectorAll(".palette-swatch").forEach((swatch) => {
-    const isActive = Number(swatch.dataset.paletteIndex) === recipe.paletteIndex;
-    swatch.classList.toggle("is-active", isActive);
-    swatch.setAttribute("aria-pressed", String(isActive));
-  });
-}
-
 function syncFullscreenUi() {
   if (!ui.fullscreenBtn) return;
   const isFullscreen = Boolean(document.fullscreenElement) || ui.canvasStage?.classList.contains("is-app-fullscreen");
   const label = isFullscreen ? "Exit Fullscreen" : "Fullscreen";
   ui.fullscreenBtn.textContent = label;
   if (ui.mobileFullscreenBtn) ui.mobileFullscreenBtn.textContent = label;
-}
-
-function syncStatus(message) {
-  if (message) {
-    ui.statusLine.textContent = message;
-    return;
-  }
-
-  if (!recipe) {
-    ui.statusLine.textContent = paletteLoadMessage;
-    return;
-  }
-
-  ui.statusLine.textContent = `${paletteLoadMessage} | ${recipe.mode} | seed ${recipe.seed}`;
 }
 
 function syncRecipeBox() {
@@ -1095,11 +1219,9 @@ async function copyRecipe() {
 
   try {
     await navigator.clipboard.writeText(text);
-    syncStatus("Recipe copied");
   } catch (error) {
     ui.recipeBox.focus();
     ui.recipeBox.select();
-    syncStatus("Recipe selected");
   }
 }
 
@@ -1108,16 +1230,14 @@ function saveRecipe() {
   syncRecipeBox();
   const blob = new Blob([ui.recipeBox.value], { type: "application/json" });
   downloadBlob(blob, `spirograph-recipe-${recipe.seed}.json`);
-  syncStatus("Recipe saved");
 }
 
 function loadRecipeFromBox() {
   try {
     const loaded = JSON.parse(ui.recipeBox.value);
     applyRecipe(loaded, { startPlaying: false });
-    syncStatus("Recipe loaded");
   } catch (error) {
-    syncStatus("Recipe JSON did not load");
+    console.warn("Recipe JSON did not load", error);
   }
 }
 
@@ -1132,16 +1252,15 @@ function savePreview() {
   preview.canvas.toBlob((blob) => {
     if (blob) {
       downloadBlob(blob, `spirograph-preview-${recipe.seed}.png`);
-      syncStatus("Watermarked preview saved");
     }
     preview.remove();
   }, "image/png");
 }
 
 function drawPreviewCursor(target, size) {
-  const palette = activePalette();
+  const colors = activeColors();
   const mapped = mapPathIndexToCanvas(currentStep, size);
-  const sparkColor = sparkColorForPalette(palette);
+  const sparkColor = sparkColorForColors(colors);
   target.push();
   target.drawingContext.save();
   target.drawingContext.shadowBlur = Math.max(14, size * 0.02);
@@ -1158,11 +1277,11 @@ function drawPreviewCursor(target, size) {
 }
 
 function drawWatermark(target, size) {
-  const palette = activePalette();
-  const lightBackground = luminance(palette.background) > 150;
+  const colors = activeColors();
+  const lightBackground = luminance(colors.background) > 150;
   const fillColor = lightBackground ? [255, 255, 255, 206] : [0, 0, 0, 172];
   const textColor = lightBackground ? [32, 33, 36, 218] : [255, 255, 255, 224];
-  const label = `preview | seed ${recipe.seed} | ${recipe.paletteName}`;
+  const label = `preview | seed ${recipe.seed}`;
 
   target.push();
   target.noStroke();
@@ -1189,11 +1308,11 @@ function downloadBlob(blob, fileName) {
 function updateSparkles() {
   if (!sparkLayer || !recipe || pathPoints.length === 0) return;
 
-  const palette = activePalette();
+  const colors = activeColors();
   sparkLayer.clear();
 
   if (isPlaying && currentStep > 0 && currentStep < recipe.totalSteps) {
-    emitSparkles(palette);
+    emitSparkles(colors);
   }
 
   sparkLayer.push();
@@ -1220,12 +1339,12 @@ function updateSparkles() {
   sparkLayer.pop();
 }
 
-function emitSparkles(palette) {
+function emitSparkles(colors) {
   const mapped = mapPathIndexToCanvas(currentStep, canvasSize);
   const previousMapped = mapPathIndexToCanvas(currentStep - playDirection * playbackStride(), canvasSize);
   const angle = Math.atan2(mapped.y - previousMapped.y, mapped.x - previousMapped.x);
-  const count = isDarkPalette(palette) ? 2 : 2;
-  const color = sparkColorForPalette(palette);
+  const count = 1;
+  const color = sparkColorForColors(colors);
 
   for (let index = 0; index < count; index += 1) {
     const sideSpray = random(-1.9, 1.9);
@@ -1256,12 +1375,12 @@ function clearSparkles() {
   }
 }
 
-function isDarkPalette(palette) {
-  return luminance(palette.background) < 90;
+function isDarkBackground(colors) {
+  return luminance(colors.background) < 90;
 }
 
-function sparkColorForPalette(palette) {
-  return isDarkPalette(palette) ? warmSparkColor(palette.points) : palette.points;
+function sparkColorForColors(colors) {
+  return isDarkBackground(colors) ? warmSparkColor(colors.points) : colors.points;
 }
 
 function warmSparkColor(baseColor) {
@@ -1274,10 +1393,6 @@ function warmSparkColor(baseColor) {
 
 function rgbaString(rgb, alpha) {
   return `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${alpha})`;
-}
-
-function trailAlphaForPalette(palette) {
-  return clamp(Math.max(MIN_TRAIL_ALPHA, Number(palette.alpha)), MIN_TRAIL_ALPHA, 220);
 }
 
 function recentFadeWindowSteps(activeRecipe) {
@@ -1312,9 +1427,9 @@ function inferRepeatCount(activeRecipe) {
   return Math.max(1, Math.round((params.tMax || TWO_PI_VALUE) / (TWO_PI_VALUE * closeTurns)));
 }
 
-function syncArtworkBackground(palette) {
-  if (!ui.canvasStage || !palette) return;
-  ui.canvasStage.style.setProperty("--artwork-background", `rgb(${palette.background.join(",")})`);
+function syncArtworkBackground(colors) {
+  if (!ui.canvasStage || !colors) return;
+  ui.canvasStage.style.setProperty("--artwork-background", `rgb(${colors.background.join(",")})`);
 }
 
 function emptyPathPoints() {
@@ -1324,17 +1439,9 @@ function emptyPathPoints() {
   };
 }
 
-function activePalette() {
-  const index = recipe ? recipe.paletteIndex : 0;
-  return palettes[index] || palettes[0] || FALLBACK_PALETTES[0];
-}
-
-function resolvePaletteIndex(value) {
-  const index = Number(value);
-  if (Number.isInteger(index) && index >= 0 && index < palettes.length) {
-    return index;
-  }
-  return 0;
+function activeColors() {
+  if (recipe?.colors) return recipe.colors;
+  return { background: DEFAULT_BG.slice(), points: DEFAULT_FG.slice() };
 }
 
 function rotatePoint(point, angle) {
@@ -1392,10 +1499,18 @@ function luminance(rgb) {
   return rgb[0] * 0.299 + rgb[1] * 0.587 + rgb[2] * 0.114;
 }
 
-function escapeHtml(value) {
-  return String(value)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+function hexToRgb(hex) {
+  if (typeof hex !== "string") return null;
+  const trimmed = hex.replace("#", "").trim();
+  if (trimmed.length !== 6) return null;
+  const r = parseInt(trimmed.slice(0, 2), 16);
+  const g = parseInt(trimmed.slice(2, 4), 16);
+  const b = parseInt(trimmed.slice(4, 6), 16);
+  if (![r, g, b].every(Number.isFinite)) return null;
+  return [r, g, b];
+}
+
+function rgbToHex(rgb) {
+  const pad = (n) => clamp(Math.round(Number(n) || 0), 0, 255).toString(16).padStart(2, "0");
+  return `#${pad(rgb[0])}${pad(rgb[1])}${pad(rgb[2])}`;
 }
