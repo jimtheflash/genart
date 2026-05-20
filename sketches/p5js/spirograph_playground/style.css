@@ -264,6 +264,7 @@ label,
   display: grid;
   position: relative;
   gap: 3px;
+  align-items: center;
   justify-items: center;
   min-height: 42px;
   min-width: 0;
@@ -276,8 +277,11 @@ label,
 }
 
 .icon-btn svg {
-  width: 30px;
-  height: 30px;
+  display: block;
+  width: min(30px, 100%);
+  height: auto;
+  max-width: 100%;
+  aspect-ratio: 1;
   color: var(--ink);
 }
 
@@ -672,8 +676,8 @@ body.has-app-fullscreen {
   }
 
   .icon-btn svg {
-    width: 34px;
-    height: 34px;
+    width: min(34px, 100%);
+    height: auto;
   }
 
   #wheelIcon {
