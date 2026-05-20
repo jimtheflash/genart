@@ -27,6 +27,11 @@ const FRESH_TRAIL_REPEATS = 1;
 const RECENT_FADE_REPEATS = 6;
 const RECENT_FADE_CHUNKS = 18;
 const RECENT_CHUNK_VERTEX_LIMIT = 9000;
+const CONTROLS_WIDTH_STORAGE_KEY = "spirographPlaygroundControlsWidth";
+const DEFAULT_CONTROLS_WIDTH = 360;
+const MIN_CONTROLS_WIDTH = 280;
+const MAX_CONTROLS_WIDTH = 520;
+const MIN_CANVAS_PANE_WIDTH = 340;
 
 // Outer (stationary) shapes — each defines a radius-vs-angle function r(t),
 // giving the distance from origin to the perimeter at angle t. This drives
@@ -91,7 +96,9 @@ let canvasSize = 720;
 let currentStep = 0;
 let renderedStep = 0;
 let isPlaying = true;
-let playDirection = 1;
+let activePanePointerId = null;
+let resizeObserver = null;
+let resizeRaf = 0;
 
 function setup() {
   pixelDensity(1);
@@ -102,6 +109,7 @@ function setup() {
   cacheUi();
   buildShapeControls();
   installUiEvents();
+  installPaneResizing();
   ui.speedRange.value = formatSpeedValue(MAX_DRAW_SPEED);
   syncSpeedUi();
   resizeArtworkCanvas();
@@ -237,7 +245,9 @@ function cacheUi() {
     saveRecipeBtn: document.getElementById("saveRecipeBtn"),
     loadRecipeBtn: document.getElementById("loadRecipeBtn"),
     recipeBox: document.getElementById("recipeBox"),
+    appShell: document.querySelector(".app-shell"),
     canvasStage: document.querySelector(".canvas-stage"),
+    paneDivider: document.getElementById("paneDivider"),
     controlsPane: document.getElementById("controlsPane"),
     controlsToggleBtn: document.getElementById("controlsToggleBtn"),
     mobileRandomBtn: document.getElementById("mobileRandomBtn"),
@@ -259,9 +269,10 @@ function buildShapeControls() {
     button.type = "button";
     button.className = "icon-btn";
     button.dataset.outerShapeId = shape.id;
+    button.dataset.tooltip = shape.label;
     button.setAttribute("aria-label", `${shape.label} outer piece`);
     button.title = shape.label;
-    button.innerHTML = `${outerShapeIconSvg(shape.id)}<span>${shape.label}</span>`;
+    button.innerHTML = outerShapeIconSvg(shape.id);
     ui.outerShapeRow.appendChild(button);
   });
 
@@ -270,9 +281,10 @@ function buildShapeControls() {
     button.type = "button";
     button.className = "icon-btn";
     button.dataset.variantId = variant.id;
+    button.dataset.tooltip = variant.label;
     button.setAttribute("aria-label", `${variant.label} (${variant.id})`);
     button.title = variant.label;
-    button.innerHTML = `${outerVariantIconSvg(variant.id)}<span>${variant.label}</span>`;
+    button.innerHTML = outerVariantIconSvg(variant.id);
     ui.outerVariantRow.appendChild(button);
   });
 
@@ -291,9 +303,10 @@ function buildShapeControls() {
     button.type = "button";
     button.className = "icon-btn";
     button.dataset.innerShapeId = shape.id;
+    button.dataset.tooltip = shape.label;
     button.setAttribute("aria-label", `${shape.label} inner wheel`);
     button.title = shape.label;
-    button.innerHTML = `${innerShapeIconSvg(shape.id)}<span>${shape.label}</span>`;
+    button.innerHTML = innerShapeIconSvg(shape.id);
     ui.innerShapeRow.appendChild(button);
   });
 
@@ -437,7 +450,6 @@ function installUiEvents() {
     if (!recipe) return;
     isPlaying = false;
     currentStep = Number(ui.progressRange.value);
-    playDirection = 1;
     renderTrailToStep(currentStep);
   });
 
@@ -456,6 +468,177 @@ function installUiEvents() {
     if (event.key === "Escape" && ui.canvasStage.classList.contains("is-app-fullscreen")) {
       exitAppFullscreen();
     }
+  });
+}
+
+function installPaneResizing() {
+  if (!ui.appShell || !ui.paneDivider || !ui.controlsPane) return;
+
+  const storedWidth = readStoredControlsWidth();
+  if (storedWidth) {
+    setControlsPaneWidth(storedWidth, { persist: false });
+  }
+  clampControlsPaneWidth();
+
+  ui.paneDivider.addEventListener("pointerdown", startPaneResize);
+  ui.paneDivider.addEventListener("pointermove", movePaneResize);
+  ui.paneDivider.addEventListener("pointerup", endPaneResize);
+  ui.paneDivider.addEventListener("pointercancel", endPaneResize);
+  ui.paneDivider.addEventListener("lostpointercapture", endPaneResize);
+  ui.paneDivider.addEventListener("keydown", handlePaneDividerKeydown);
+  window.addEventListener("pointermove", movePaneResize);
+  window.addEventListener("pointerup", endPaneResize);
+  window.addEventListener("pointercancel", endPaneResize);
+  window.addEventListener("blur", endPaneResize);
+
+  window.addEventListener("resize", () => {
+    clampControlsPaneWidth();
+    scheduleArtworkResize();
+  });
+
+  if ("ResizeObserver" in window) {
+    resizeObserver = new ResizeObserver(scheduleArtworkResize);
+    resizeObserver.observe(ui.canvasStage);
+    resizeObserver.observe(ui.controlsPane);
+  }
+}
+
+function readStoredControlsWidth() {
+  try {
+    const value = Number(window.localStorage.getItem(CONTROLS_WIDTH_STORAGE_KEY));
+    return Number.isFinite(value) ? value : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function controlsPaneWidthBounds() {
+  const shellWidth = ui.appShell?.getBoundingClientRect().width || window.innerWidth;
+  const maxWidth = Math.max(
+    MIN_CONTROLS_WIDTH,
+    Math.min(MAX_CONTROLS_WIDTH, shellWidth - MIN_CANVAS_PANE_WIDTH - 24),
+  );
+
+  return {
+    min: Math.min(MIN_CONTROLS_WIDTH, maxWidth),
+    max: maxWidth,
+  };
+}
+
+function getCurrentControlsPaneWidth() {
+  const measuredWidth = ui.controlsPane?.getBoundingClientRect().width;
+  if (Number.isFinite(measuredWidth) && measuredWidth > 0) return measuredWidth;
+
+  const cssWidth = Number.parseFloat(getComputedStyle(ui.appShell).getPropertyValue("--controls-width"));
+  return Number.isFinite(cssWidth) ? cssWidth : DEFAULT_CONTROLS_WIDTH;
+}
+
+function setControlsPaneWidth(width, options = {}) {
+  if (!ui.appShell) return;
+  const { persist = true } = options;
+  const bounds = controlsPaneWidthBounds();
+  const safeWidth = Number.isFinite(Number(width)) ? Number(width) : DEFAULT_CONTROLS_WIDTH;
+  const nextWidth = clamp(Math.round(safeWidth), bounds.min, bounds.max);
+
+  ui.appShell.style.setProperty("--controls-width", `${nextWidth}px`);
+
+  if (ui.paneDivider) {
+    ui.paneDivider.setAttribute("aria-valuemin", String(Math.round(bounds.min)));
+    ui.paneDivider.setAttribute("aria-valuemax", String(Math.round(bounds.max)));
+    ui.paneDivider.setAttribute("aria-valuenow", String(nextWidth));
+  }
+
+  if (persist) {
+    try {
+      window.localStorage.setItem(CONTROLS_WIDTH_STORAGE_KEY, String(nextWidth));
+    } catch (error) {
+      // Local storage can be unavailable under file or privacy settings.
+    }
+  }
+
+  scheduleArtworkResize();
+}
+
+function clampControlsPaneWidth() {
+  if (!isDesktopSplitLayout()) {
+    scheduleArtworkResize();
+    return;
+  }
+
+  setControlsPaneWidth(getCurrentControlsPaneWidth(), { persist: false });
+}
+
+function isDesktopSplitLayout() {
+  return window.matchMedia("(min-width: 861px)").matches;
+}
+
+function startPaneResize(event) {
+  if (!isDesktopSplitLayout()) return;
+  endPaneResize();
+  activePanePointerId = event.pointerId;
+  ui.paneDivider.classList.add("is-dragging");
+  document.body.classList.add("is-resizing-pane");
+  ui.paneDivider.setPointerCapture?.(event.pointerId);
+  event.preventDefault();
+  updateControlsPaneWidthFromPointer(event.clientX, false);
+}
+
+function movePaneResize(event) {
+  if (activePanePointerId === null) return;
+  if (event.pointerId !== undefined && event.pointerId !== activePanePointerId) return;
+  event.preventDefault();
+  updateControlsPaneWidthFromPointer(event.clientX, false);
+}
+
+function endPaneResize(event = {}) {
+  const wasDragging = ui.paneDivider?.classList.contains("is-dragging");
+  if (activePanePointerId === null && !wasDragging) return;
+  if (event.pointerId !== undefined && activePanePointerId !== null && event.pointerId !== activePanePointerId) {
+    return;
+  }
+
+  const pointerId = event.pointerId ?? activePanePointerId;
+  activePanePointerId = null;
+  ui.paneDivider.classList.remove("is-dragging");
+  document.body.classList.remove("is-resizing-pane");
+  try {
+    if (pointerId !== null) {
+      ui.paneDivider.releasePointerCapture?.(pointerId);
+    }
+  } catch (error) {
+    // The pointer may already be released after cancellation.
+  }
+  setControlsPaneWidth(getCurrentControlsPaneWidth());
+}
+
+function updateControlsPaneWidthFromPointer(clientX, persist) {
+  const shellRect = ui.appShell.getBoundingClientRect();
+  setControlsPaneWidth(shellRect.right - clientX, { persist });
+}
+
+function handlePaneDividerKeydown(event) {
+  if (!isDesktopSplitLayout()) return;
+
+  const bounds = controlsPaneWidthBounds();
+  const currentWidth = getCurrentControlsPaneWidth();
+  const nudge = event.shiftKey ? 48 : 16;
+  let nextWidth = null;
+
+  if (event.key === "ArrowLeft") nextWidth = currentWidth + nudge;
+  if (event.key === "ArrowRight") nextWidth = currentWidth - nudge;
+  if (event.key === "Home") nextWidth = bounds.min;
+  if (event.key === "End") nextWidth = bounds.max;
+  if (nextWidth === null) return;
+
+  event.preventDefault();
+  setControlsPaneWidth(nextWidth);
+}
+
+function scheduleArtworkResize() {
+  if (resizeRaf) return;
+  resizeRaf = requestAnimationFrame(() => {
+    resizeRaf = 0;
+    resizeArtworkCanvas();
   });
 }
 
@@ -573,7 +756,6 @@ function applyRecipe(nextRecipe, options = {}) {
   currentStep = clamp(Math.round(Number(recipe.currentStep || 0)), 0, recipe.totalSteps);
   renderedStep = 0;
   sparkles = [];
-  playDirection = recipe.playDirection === -1 ? -1 : 1;
   isPlaying = options.startPlaying ?? false;
 
   ui.modeSelect.value = recipe.mode;
@@ -606,7 +788,6 @@ function normalizeRecipe(source) {
   const drawSpeed = normalizeDrawSpeed(source.drawSpeed ?? ui.speedRange.value);
   const currentStepValue = clamp(Math.round(Number(source.currentStep || 0)), 0, totalSteps);
   const progressPercent = totalSteps > 0 ? roundForRecipe((currentStepValue / totalSteps) * 100) : 0;
-  const playDirectionValue = source.playDirection === -1 ? -1 : 1;
   const params =
     mode === "epicycle"
       ? normalizeEpicycleParams(source.params || fallback.params)
@@ -631,7 +812,6 @@ function normalizeRecipe(source) {
     drawSpeed,
     currentStep: currentStepValue,
     progressPercent,
-    playDirection: playDirectionValue,
     ...(shape ? { shape } : {}),
     params,
   };
@@ -1181,9 +1361,11 @@ function normalizedPointAt(index) {
 function resizeArtworkCanvas() {
   const mount = document.getElementById("canvasMount");
   const stage = document.querySelector(".canvas-stage");
-  const stageWidth = stage ? stage.getBoundingClientRect().width : window.innerWidth;
+  const stageRect = stage ? stage.getBoundingClientRect() : null;
+  const stageWidth = stageRect?.width || window.innerWidth;
+  const stageHeight = stageRect?.height || window.innerHeight - 96;
   const fullscreenActive = document.fullscreenElement === stage || stage?.classList.contains("is-app-fullscreen");
-  const heightLimit = fullscreenActive ? window.innerHeight : Math.max(320, window.innerHeight - 96);
+  const heightLimit = fullscreenActive ? window.innerHeight : Math.max(320, stageHeight);
   const maxCanvasSize = fullscreenActive ? 1600 : 920;
   const nextSize = clamp(Math.floor(Math.min(stageWidth, heightLimit, maxCanvasSize)), 320, maxCanvasSize);
 
@@ -1207,12 +1389,7 @@ function renderTrailToStep(step) {
   clearTransparentLayer(baseTrailLayer);
   clearTransparentLayer(recentTrailLayer);
   drawBaseTrailToStep(step, baseTrailLayer, canvasSize);
-  // In reverse, the user wants the already-drawn line to stay at its dim base
-  // opacity — only the cursor should animate. Skipping the recent-fade keeps
-  // the line steady across the 100% boundary.
-  if (playDirection >= 0) {
-    drawRecentTrailToStep(step, recentTrailLayer, canvasSize, playDirection);
-  }
+  drawRecentTrailToStep(step, recentTrailLayer, canvasSize);
   renderedStep = step;
   clearSparkles();
   syncProgressUi();
@@ -1228,7 +1405,7 @@ function drawTrailCompositeToStep(step, target, size) {
   target.background(...colors.background);
   target.pop();
   drawBaseTrailToStep(step, target, size);
-  drawRecentTrailToStep(step, target, size, playDirection);
+  drawRecentTrailToStep(step, target, size);
 }
 
 function drawBaseTrailToStep(step, target, size) {
@@ -1244,24 +1421,14 @@ function drawBaseTrailSegment(fromStep, toStep, target, size) {
   drawTrailRange(start, end, target, size, colors, alpha);
 }
 
-function drawRecentTrailToStep(step, target, size, direction = 1) {
+function drawRecentTrailToStep(step, target, size) {
   if (!recipe || pathPoints.length === 0) return;
   const colors = activeColors();
   const focusStep = clamp(Math.floor(step), 0, recipe.totalSteps);
   const windowSteps = recentFadeWindowSteps(recipe);
-
-  let start;
-  let end;
-  let peakStep;
-  if (direction >= 0) {
-    start = Math.max(0, focusStep - windowSteps);
-    end = focusStep;
-    peakStep = end;
-  } else {
-    start = focusStep;
-    end = Math.min(recipe.totalSteps, focusStep + windowSteps);
-    peakStep = start;
-  }
+  const start = Math.max(0, focusStep - windowSteps);
+  const end = focusStep;
+  const peakStep = end;
 
   const span = end - start;
   if (span <= 0) return;
@@ -1300,30 +1467,22 @@ function drawTrailRange(start, end, target, size, colors, alpha, maxVertices = M
 function advancePlayback() {
   if (!recipe) return;
 
-  const stride = playbackStride();
-  const nextStep = clamp(currentStep + playDirection * stride, 0, recipe.totalSteps);
-
-  if (playDirection > 0) {
-    drawBaseTrailSegment(currentStep, nextStep, baseTrailLayer, canvasSize);
-    clearTransparentLayer(recentTrailLayer);
-    drawRecentTrailToStep(nextStep, recentTrailLayer, canvasSize, playDirection);
-  } else {
-    // Reverse: the line is already fully drawn into baseTrailLayer; clear the
-    // recent-fade so the cursor sweeps back across a steady-opacity line.
-    clearTransparentLayer(recentTrailLayer);
+  if (currentStep >= recipe.totalSteps) {
+    currentStep = 0;
+    renderedStep = 0;
+    renderTrailToStep(0);
+    return;
   }
+
+  const stride = playbackStride();
+  const nextStep = clamp(currentStep + stride, 0, recipe.totalSteps);
+
+  drawBaseTrailSegment(currentStep, nextStep, baseTrailLayer, canvasSize);
+  clearTransparentLayer(recentTrailLayer);
+  drawRecentTrailToStep(nextStep, recentTrailLayer, canvasSize);
 
   currentStep = nextStep;
   renderedStep = nextStep;
-
-  if (currentStep >= recipe.totalSteps) {
-    playDirection = -1;
-    currentStep = recipe.totalSteps;
-  } else if (currentStep <= 0) {
-    playDirection = 1;
-    currentStep = 0;
-    renderTrailToStep(0);
-  }
 
   syncProgressUi();
 }
@@ -1358,7 +1517,6 @@ function mapPathIndexToCanvas(index, size) {
 function restartArtwork() {
   if (!recipe) return;
   currentStep = 0;
-  playDirection = 1;
   isPlaying = true;
   sparkles = [];
   renderTrailToStep(0);
@@ -1373,7 +1531,6 @@ function togglePlayback() {
 function jumpToEnd() {
   if (!recipe) return;
   currentStep = recipe.totalSteps;
-  playDirection = -1;
   isPlaying = false;
   renderTrailToStep(currentStep);
 }
@@ -1521,7 +1678,6 @@ function recipeForCurrentStep() {
     ...recipe,
     currentStep: safeStep,
     progressPercent,
-    playDirection,
   };
 }
 
@@ -1654,7 +1810,7 @@ function updateSparkles() {
 
 function emitSparkles(colors) {
   const mapped = mapPathIndexToCanvas(currentStep, canvasSize);
-  const previousMapped = mapPathIndexToCanvas(currentStep - playDirection * playbackStride(), canvasSize);
+  const previousMapped = mapPathIndexToCanvas(currentStep - playbackStride(), canvasSize);
   const angle = Math.atan2(mapped.y - previousMapped.y, mapped.x - previousMapped.x);
   const count = 1;
   const color = sparkColorForColors(colors);
